@@ -15,16 +15,7 @@ param(
   [int]$MaxEventsToScan = 200
 )
 
-$BaseDir = "C:\ProgramData\SecureBoot2026"
-$LogPath = Join-Path $BaseDir "readiness.log"
-$RegOut  = "HKLM:\SOFTWARE\Company\SecureBoot2026"
 
-New-Item -Path $BaseDir -ItemType Directory -Force | Out-Null
-New-Item -Path $RegOut -Force | Out-Null
-
-function Write-Log($msg) {
-  Add-Content -Path $LogPath -Encoding UTF8 -Value ("{0} [{1}] {2}" -f (Get-Date -Format s), $env:COMPUTERNAME, $msg)
-}
 function Set-RegString($name, $value) {
   New-ItemProperty -Path $RegOut -Name $name -Value ([string]$value) -PropertyType String -Force | Out-Null
 }
@@ -118,11 +109,7 @@ $summary = [PSCustomObject]@{
 }
 
 $json = $summary | ConvertTo-Json -Depth 4
-Set-RegString "LastRun" $summary.Timestamp
-Set-RegString "SafeForJune2026" $safe
-Set-RegString "LastSummaryJson" $json
 
-Write-Log "Detection v2: SafeForJune2026=$safe; SecureBootOn=$secureBootOn; Status=$UEFICA2023Status; Err=$UEFICA2023Error; 1808=$latestSuccessTime; LatestFail=$latestFailureTime; ErrorsAfterSuccess=$errorsAfterSuccess"
 Write-Output $json
 
 if ($safe) { exit 0 } else { exit 1 }
