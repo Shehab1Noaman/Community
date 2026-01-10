@@ -96,7 +96,12 @@ function Get-UefiX509Certs {
 
         $certs = @()
         foreach ($s in $certSigs) {
-            try { $certs += [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($s.Data) } catch {}
+            try { 
+                $certs += [System.Security.Cryptography.X509Certificate2]::new($s.Data)
+            } catch {
+                # Log or count parsing failures if needed for diagnostics
+                Write-Verbose "Failed to parse cert: $_"
+            }
         }
 
         return $certs
@@ -203,7 +208,7 @@ if ($latest1808 -and (-not $latest1801 -or $latest1808.TimeCreated -ge $latest18
 elseif ($latest1801 -and (-not $latest1808 -or $latest1801.TimeCreated -gt $latest1808.TimeCreated)) {
     $firmwarePending = $true
     $firmwareState   = "Pending"
-    $firmwareNotAppliedReason = $latest1801.Message #Get-FirstLine -Text $latest1801.Message 
+    $firmwareNotAppliedReason = $latest1801.Message
 }
 
 # Errors after success?
