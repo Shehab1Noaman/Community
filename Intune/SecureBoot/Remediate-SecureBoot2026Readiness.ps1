@@ -1,111 +1,464 @@
 #requires -Version 5.1
 <#
-Remediation (Microsoft-aligned):
-  - If not updated, set AvailableUpdates=0x5944 (enterprise trigger) and start Secure-Boot-Update task.
-  - Does NOT change HighConfidenceOptOut/MicrosoftUpdateManagedOptIn (you manage those by policy).
-  - Records key status + relevant events.
-
-Exit 0 = now compliant
-Exit 1 = still not compliant / needs reboot / firmware issue
+.SYNOPSIS
+    Secure Boot 2026 Remediation - Enhanced version with improved error handling
+    
+.DESCRIPTION
+    Remediates Secure Boot firmware updates (UEFI CA 2023) for Windows devices.
+    Outputs comprehensive JSON with status, actions, and next steps.
+    
+.OUTPUTS
+    Compressed JSON object with Status, Reason, NextSteps, PreState, Actions, PostState
+    
+.NOTES
+    Exit 0 = Completed (Compliant)
+    Exit 1 = NotCompleted (Requires action)
 #>
 
 [CmdletBinding()]
 param()
 
-$BaseDir = "C:\ProgramData\SecureBoot2026"
-$LogPath = Join-Path $BaseDir "readiness.log"
-$RegOut  = "HKLM:\SOFTWARE\Company\SecureBoot2026"
+# Constants
+$SBRoot   = "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot"
+$SBServ   = "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing"
+$Provider = "Microsoft-Windows-TPM-WMI"
+$TaskPath = "\Microsoft\Windows\PI\"
+$TaskName = "Secure-Boot-Update"
 
-New-Item -Path $BaseDir -ItemType Directory -Force | Out-Null
-New-Item -Path $RegOut -Force | Out-Null
+# Task completion check timeout (seconds)
+$TaskWaitTimeout = 15
+$TaskCheckInterval = 1
 
-function Write-Log($msg) {
-  Add-Content -Path $LogPath -Encoding UTF8 -Value ("{0} [{1}] {2}" -f (Get-Date -Format s), $env:COMPUTERNAME, $msg)
-}
-function Set-RegString($name, $value) {
-  New-ItemProperty -Path $RegOut -Name $name -Value ([string]$value) -PropertyType String -Force | Out-Null
-}
-function Get-RegValue($path, $name) {
-  try { (Get-ItemProperty -Path $path -Name $name -ErrorAction Stop).$name } catch { $null }
-}
+#region Helper Functions
 
-$SBRoot = "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot"
-$SBServ = "HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing"
-$provider = "TPM-WMI"
-
-# Must have Secure Boot ON; otherwise these updates are not applicable (Microsoft guidance focuses on SB-enabled devices)
-$secureBootOn = $null
-try { $secureBootOn = Confirm-SecureBootUEFI -ErrorAction Stop } catch { $secureBootOn = $null }
-
-if ($secureBootOn -ne $true) {
-  Write-Log "Remediation v2: Secure Boot is not ON (or cannot be determined). Skipping AvailableUpdates trigger."
-  Set-RegString "RemediationResult" "Skipped: Secure Boot not ON / unknown"
-  exit 1
-}
-
-$UEFICA2023Status = Get-RegValue $SBServ "UEFICA2023Status"
-$UEFICA2023Error  = Get-RegValue $SBServ "UEFICA2023Error"
-$statusUpdated = ($UEFICA2023Status -and $UEFICA2023Status.Trim().ToLower() -eq "updated")
-
-# Check firmware error event 1795 (OEM firmware returned error applying SB variables) :contentReference[oaicite:15]{index=15}
-$fw1795 = $null
-try { $fw1795 = Get-WinEvent -FilterHashtable @{LogName="System"; ProviderName=$provider; Id=1795} -MaxEvents 1 -ErrorAction Stop } catch {}
-
-if ($fw1795) {
-  Write-Log "Remediation v2: Found Event 1795 (firmware error applying Secure Boot variables). Likely needs OEM firmware update."
-  Set-RegString "FirmwareIssueDetected" "True"
-  Set-RegString "FirmwareIssueLast1795" $fw1795.TimeCreated
-  # Still proceed to trigger if not updated (sometimes firmware update is required, but trigger may still be useful for logging progress)
-}
-
-if (-not $statusUpdated) {
-  # Enterprise trigger: AvailableUpdates=0x5944 :contentReference[oaicite:16]{index=16}
-  try {
-    New-Item -Path $SBRoot -Force | Out-Null
-    New-ItemProperty -Path $SBRoot -Name "AvailableUpdates" -PropertyType DWord -Value 0x5944 -Force | Out-Null
-    Write-Log "Remediation v2: Set AvailableUpdates=0x5944"
-  } catch {
-    Write-Log "Remediation v2: Failed to set AvailableUpdates: $($_.Exception.Message)"
-    Set-RegString "RemediationResult" "Failed to set AvailableUpdates"
-    exit 1
-  }
-
-  # Kick the scheduled task now (instead of waiting up to 12 hours) :contentReference[oaicite:17]{index=17}
-  $taskName = "\Microsoft\Windows\PI\Secure-Boot-Update"
-  try {
-    if (Get-ScheduledTask -TaskPath "\Microsoft\Windows\PI\" -TaskName "Secure-Boot-Update" -ErrorAction SilentlyContinue) {
-      Start-ScheduledTask -TaskPath "\Microsoft\Windows\PI\" -TaskName "Secure-Boot-Update"
-      Write-Log "Remediation v2: Started scheduled task $taskName"
-    } else {
-      Write-Log "Remediation v2: Scheduled task not found: $taskName"
+function Get-RegValue {
+    param([string]$Path, [string]$Name)
+    try { 
+        (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name 
+    } catch { 
+        $null 
     }
-  } catch {
-    Write-Log "Remediation v2: Failed to start scheduled task: $($_.Exception.Message)"
-  }
-
-  Set-RegString "RebootRecommended" "True"
-  Write-Log "Remediation v2: Reboot recommended (boot manager step may require restart)."
-} else {
-  Write-Log "Remediation v2: Already Updated per UEFICA2023Status."
 }
 
-# Re-evaluate success: Status Updated OR Event 1808 exists :contentReference[oaicite:18]{index=18}
-$UEFICA2023Status2 = Get-RegValue $SBServ "UEFICA2023Status"
-$UEFICA2023Error2  = Get-RegValue $SBServ "UEFICA2023Error"
-$statusUpdated2 = ($UEFICA2023Status2 -and $UEFICA2023Status2.Trim().ToLower() -eq "updated")
-$hasError2 = ($UEFICA2023Error2 -ne $null -and [int]$UEFICA2023Error2 -ne 0)
+function First-Line {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    return (($Text -split "(\r?\n)")[0]).Trim()
+}
 
-$event1808 = $null
-try { $event1808 = Get-WinEvent -FilterHashtable @{LogName="System"; ProviderName=$provider; Id=1808} -MaxEvents 1 -ErrorAction Stop } catch {}
+function Get-TpmEvents {
+    param([int[]]$Ids, [int]$Max = 200)
+    try {
+        Get-WinEvent -FilterHashtable @{
+            LogName      = "System"
+            ProviderName = $Provider
+            Id           = $Ids
+        } -MaxEvents $Max -ErrorAction SilentlyContinue
+    } catch {
+        @()
+    }
+}
 
-$nowSafe = $statusUpdated2 -or ($event1808 -ne $null)
-if ($hasError2) { $nowSafe = $false }
+function Get-FirmwareStateFromEvents {
+    $events = Get-TpmEvents -Ids @(1795,1796,1797,1798,1799,1801,1808) -Max 300
 
-Set-RegString "PostRemediationStatus" $UEFICA2023Status2
-Set-RegString "PostRemediationError"  $UEFICA2023Error2
-Set-RegString "PostRemediationLast1808" ($(if ($event1808) { $event1808.TimeCreated } else { "" }))
-Set-RegString "RemediationResult" ($(if ($nowSafe) { "Compliant" } else { "NotYetCompliant/NeedsRebootOrInvestigation" }))
+    $latest1808 = $events | Where-Object { $_.Id -eq 1808 } | Sort-Object TimeCreated -Descending | Select-Object -First 1
+    $latest1801 = $events | Where-Object { $_.Id -eq 1801 } | Sort-Object TimeCreated -Descending | Select-Object -First 1
+    $latest1799 = $events | Where-Object { $_.Id -eq 1799 } | Sort-Object TimeCreated -Descending | Select-Object -First 1
+    $latestFwErr = $events | Where-Object { $_.Id -in 1795,1796,1797,1798 } | Sort-Object TimeCreated -Descending | Select-Object -First 1
 
-Write-Log "Remediation v2: PostStatus=$UEFICA2023Status2; PostError=$UEFICA2023Error2; Last1808=$($event1808.TimeCreated); CompliantNow=$nowSafe"
+    $state  = "Unknown"
+    $reason = $null
 
-if ($nowSafe) { exit 0 } else { exit 1 }
+    # Event 1808 = firmware applied successfully
+    # Event 1801 = firmware updates staged/pending
+    if ($latest1808 -and (-not $latest1801 -or $latest1808.TimeCreated -ge $latest1801.TimeCreated)) {
+        $state = "Applied"
+    } elseif ($latest1801 -and (-not $latest1808 -or $latest1801.TimeCreated -gt $latest1808.TimeCreated)) {
+        $state  = "Pending"
+        $reason = First-Line -Text $latest1801.Message
+    }
+
+    [PSCustomObject]@{
+        FirmwareState      = $state
+        PendingReason      = $reason
+        Latest1801Time     = $(if ($latest1801) { $latest1801.TimeCreated.ToString("o") } else { $null })
+        Latest1808Time     = $(if ($latest1808) { $latest1808.TimeCreated.ToString("o") } else { $null })
+        Latest1799Time     = $(if ($latest1799) { $latest1799.TimeCreated.ToString("o") } else { $null })
+        Latest1799Message  = $(if ($latest1799) { (First-Line -Text $latest1799.Message) } else { $null })
+        LatestFwErrorId    = $(if ($latestFwErr) { $latestFwErr.Id } else { $null })
+        LatestFwErrorTime  = $(if ($latestFwErr) { $latestFwErr.TimeCreated.ToString("o") } else { $null })
+        LatestFwErrorMsg   = $(if ($latestFwErr) { (First-Line -Text $latestFwErr.Message) } else { $null })
+    }
+}
+
+function Get-BitLockerProtectionOn {
+    param([string]$MountPoint = "C:")
+
+    # Try PowerShell cmdlet first
+    try {
+        $blv = Get-BitLockerVolume -MountPoint $MountPoint -ErrorAction Stop
+        if ($blv -and $blv.ProtectionStatus) { 
+            return ($blv.ProtectionStatus -eq 'On') 
+        }
+    } catch { }
+
+    # Fallback to manage-bde (works across language versions)
+    try {
+        $out = & manage-bde -status $MountPoint 2>$null
+        if ($out) {
+            # Check for "Protection On" pattern (case-insensitive, flexible whitespace)
+            if ($out -match "Protection\s+(On|Status:\s*On)") { return $true }
+            if ($out -match "Protection\s+(Off|Status:\s*Off)") { return $false }
+        }
+    } catch { }
+
+    return $null
+}
+
+function Suspend-BitLockerTwoReboots {
+    param([string]$MountPoint = "C:")
+
+    $result = [PSCustomObject]@{
+        Attempted = $false
+        Success   = $false
+        Method    = $null
+        Message   = $null
+    }
+
+    $protOn = Get-BitLockerProtectionOn -MountPoint $MountPoint
+    if ($protOn -ne $true) {
+        $result.Attempted = $false
+        $result.Success   = $true
+        $result.Method    = "NotNeeded"
+        $result.Message   = $(if ($protOn -eq $false) { 
+            "BitLocker protection is OFF (no suspend required)." 
+        } else { 
+            "BitLocker status unknown; not suspending." 
+        })
+        return $result
+    }
+
+    $result.Attempted = $true
+
+    # Try PowerShell cmdlet first
+    try {
+        Suspend-BitLocker -MountPoint $MountPoint -RebootCount 2 -ErrorAction Stop | Out-Null
+        $result.Success = $true
+        $result.Method  = "Suspend-BitLocker"
+        $result.Message = "BitLocker protection suspended for 2 reboots."
+        return $result
+    } catch {
+        $result.Method  = "Suspend-BitLocker"
+        $result.Message = "Suspend-BitLocker failed: $($_.Exception.Message)"
+    }
+
+    # Fallback to manage-bde
+    try {
+        $output = & manage-bde -protectors -disable $MountPoint -RebootCount 2 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $result.Success = $true
+            $result.Method  = "manage-bde"
+            $result.Message = "BitLocker protectors disabled for 2 reboots."
+            return $result
+        } else {
+            $result.Method  = "manage-bde"
+            $result.Message = "manage-bde failed with exit code $LASTEXITCODE"
+        }
+    } catch {
+        $result.Method  = "manage-bde"
+        $result.Message = "manage-bde disable failed: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+function Get-HasUEFIServicingError {
+    param([object]$errVal)
+    if ($null -eq $errVal) { return $false }
+    try { return ([int]$errVal -ne 0) } catch { return $false }
+}
+
+function Wait-ForTaskCompletion {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName,
+        [int]$TimeoutSeconds = 15
+    )
+    
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        Start-Sleep -Seconds $TaskCheckInterval
+        $elapsed += $TaskCheckInterval
+        
+        try {
+            $taskInfo = Get-ScheduledTaskInfo -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+            # State 3 = Ready (completed), State 4 = Disabled
+            if ($taskInfo.LastTaskResult -ne $null -and 
+                $taskInfo.LastRunTime -gt (Get-Date).AddSeconds(-$TimeoutSeconds)) {
+                return $taskInfo
+            }
+        } catch {
+            return $null
+        }
+    }
+    
+    # Timeout reached
+    return $null
+}
+
+#endregion
+
+#region Pre-State Assessment
+
+$actions = New-Object System.Collections.Generic.List[object]
+
+$secureBootOn = $null
+try { 
+    $secureBootOn = Confirm-SecureBootUEFI -ErrorAction Stop 
+} catch { 
+    $secureBootOn = $null 
+}
+
+$pre = [PSCustomObject]@{
+    Timestamp                 = (Get-Date).ToString("o")
+    Computer                  = $env:COMPUTERNAME
+    SecureBootOn              = $secureBootOn
+    UEFICA2023Status          = (Get-RegValue $SBServ "UEFICA2023Status")
+    UEFICA2023Error           = (Get-RegValue $SBServ "UEFICA2023Error")
+    WindowsUEFICA2023Capable  = (Get-RegValue $SBServ "WindowsUEFICA2023Capable")
+    AvailableUpdates          = (Get-RegValue $SBRoot "AvailableUpdates")
+    Firmware                  = (Get-FirmwareStateFromEvents)
+}
+
+$preHasError = Get-HasUEFIServicingError $pre.UEFICA2023Error
+
+# Validate prerequisites: Secure Boot must be enabled
+if ($secureBootOn -ne $true) {
+    $out = [PSCustomObject]@{
+        Status    = "NotCompleted"
+        Reason    = "Secure Boot is not ON (or cannot be determined). Remediation requires Secure Boot to be enabled in UEFI/BIOS."
+        NextSteps = @(
+            "Enable Secure Boot in UEFI/BIOS firmware settings",
+            "Verify device supports UEFI (not legacy BIOS)",
+            "Re-run remediation after enabling Secure Boot"
+        )
+        PreState  = $pre
+        Actions   = @()
+        PostState = $pre
+    }
+    $out | ConvertTo-Json -Depth 12 -Compress
+    exit 1
+}
+
+# Check if already compliant
+if (($pre.Firmware.FirmwareState -eq "Applied") -and (-not $preHasError)) {
+    $out = [PSCustomObject]@{
+        Status    = "Completed"
+        Reason    = "Device is already compliant. Firmware application confirmed (Event 1808) with no servicing errors."
+        NextSteps = @()
+        PreState  = $pre
+        Actions   = @()
+        PostState = $pre
+    }
+    $out | ConvertTo-Json -Depth 12 -Compress
+    exit 0
+}
+
+#endregion
+
+#region Remediation Actions
+
+# Action 1: Set AvailableUpdates registry value (0x5944 = UEFI CA 2023)
+$setAU = [PSCustomObject]@{
+    Action  = "SetAvailableUpdates"
+    Target  = "$SBRoot\AvailableUpdates"
+    Value   = "0x5944"
+    Success = $false
+    Error   = $null
+}
+try {
+    if (-not (Test-Path $SBRoot)) {
+        New-Item -Path $SBRoot -Force -ErrorAction Stop | Out-Null
+    }
+    New-ItemProperty -Path $SBRoot -Name "AvailableUpdates" -PropertyType DWord -Value 0x5944 -Force -ErrorAction Stop | Out-Null
+    $setAU.Success = $true
+} catch {
+    $setAU.Error = $_.Exception.Message
+}
+$actions.Add($setAU)
+
+# Action 2: Start Scheduled Task to apply firmware update
+$startTask = [PSCustomObject]@{
+    Action         = "StartScheduledTask"
+    Task           = "$TaskPath$TaskName"
+    TaskFound      = $false
+    StartAttempt   = $false
+    StartSuccess   = $false
+    LastTaskResult = $null
+    TaskWaitTime   = 0
+    Error          = $null
+}
+try {
+    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        $startTask.TaskFound = $true
+        $startTask.StartAttempt = $true
+        
+        # Record time before starting
+        $startTime = Get-Date
+        Start-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+        $startTask.StartSuccess = $true
+
+        # Wait for task to complete or timeout
+        $taskInfo = Wait-ForTaskCompletion -TaskPath $TaskPath -TaskName $TaskName -TimeoutSeconds $TaskWaitTimeout
+        $startTask.TaskWaitTime = ((Get-Date) - $startTime).TotalSeconds
+        
+        if ($taskInfo) {
+            $startTask.LastTaskResult = $taskInfo.LastTaskResult
+        } else {
+            $startTask.Error = "Task did not complete within $TaskWaitTimeout seconds"
+        }
+    } else {
+        $startTask.Error = "Scheduled task not found"
+    }
+} catch {
+    $startTask.Error = $_.Exception.Message
+}
+$actions.Add($startTask)
+
+# Action 3: Suspend BitLocker to prevent recovery prompts during firmware update
+$bl = Suspend-BitLockerTwoReboots -MountPoint "C:"
+$actions.Add([PSCustomObject]@{
+    Action    = "BitLockerSuspendForTwoReboots"
+    Attempted = $bl.Attempted
+    Success   = $bl.Success
+    Method    = $bl.Method
+    Message   = $bl.Message
+})
+
+#endregion
+
+#region Post-State Assessment
+
+$post = [PSCustomObject]@{
+    Timestamp                 = (Get-Date).ToString("o")
+    Computer                  = $env:COMPUTERNAME
+    SecureBootOn              = $secureBootOn
+    UEFICA2023Status          = (Get-RegValue $SBServ "UEFICA2023Status")
+    UEFICA2023Error           = (Get-RegValue $SBServ "UEFICA2023Error")
+    WindowsUEFICA2023Capable  = (Get-RegValue $SBServ "WindowsUEFICA2023Capable")
+    AvailableUpdates          = (Get-RegValue $SBRoot "AvailableUpdates")
+    Firmware                  = (Get-FirmwareStateFromEvents)
+}
+
+$postHasError = Get-HasUEFIServicingError $post.UEFICA2023Error
+$compliantNow = ($post.Firmware.FirmwareState -eq "Applied") -and (-not $postHasError)
+
+#endregion
+
+#region Build Final Status
+
+$status = "NotCompleted"
+$reason = "Remediation actions completed, but device requires additional steps to reach compliance."
+$nextSteps = @()
+
+if ($compliantNow) {
+    # Device is now compliant
+    $status = "Completed"
+    $reason = "Device is now compliant. Firmware application confirmed (Event 1808) with no servicing errors."
+    $nextSteps = @()
+} else {
+    # Determine why not compliant and provide guidance
+    
+    if ($post.Firmware.FirmwareState -eq "Pending") {
+        $reason = "Firmware updates are staged but not yet applied to device firmware (Event 1801 detected). Device requires reboot(s) to complete firmware application."
+        if ($post.Firmware.PendingReason) { 
+            $reason += " Details: $($post.Firmware.PendingReason)" 
+        }
+        $nextSteps += "Reboot the device (recommended: reboot twice if BitLocker was suspended)"
+        $nextSteps += "Re-run detection after reboot to confirm Event 1808 appears"
+        $nextSteps += "Ensure device remains powered during firmware update process"
+        
+    } elseif ($post.Firmware.FirmwareState -eq "Unknown") {
+        $reason = "Cannot confirm firmware application from event logs (1801/1808 events not found or inconclusive). Device may need reboot and re-check."
+        $nextSteps += "Reboot the device to allow firmware updates to process"
+        $nextSteps += "Re-run detection after reboot"
+        $nextSteps += "Check System event log for TPM-WMI provider events (1795-1808)"
+    }
+
+    # Check for critical action failures
+    if (-not $setAU.Success) {
+        $reason += " CRITICAL: Failed to set AvailableUpdates registry value."
+        $nextSteps += "Verify administrative privileges and registry access"
+        $nextSteps += "Manually verify HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\AvailableUpdates = 0x5944"
+    }
+
+    # Check for servicing errors
+    if ($postHasError) {
+        $reason += " Servicing error detected (UEFICA2023Error is non-zero: $($post.UEFICA2023Error))."
+        $nextSteps += "Investigate Secure Boot servicing error in registry: $SBServ\UEFICA2023Error"
+        $nextSteps += "Check TPM-WMI events 1795-1798 for firmware error details"
+        $nextSteps += "Ensure device firmware is up to date from OEM"
+    }
+
+    # Check for firmware errors
+    if ($post.Firmware.LatestFwErrorId) {
+        $errMsg = if ($post.Firmware.LatestFwErrorMsg) { 
+            ": $($post.Firmware.LatestFwErrorMsg)" 
+        } else { 
+            "" 
+        }
+        $nextSteps += "Firmware error detected (Event $($post.Firmware.LatestFwErrorId)$errMsg)"
+        $nextSteps += "Check for BIOS/UEFI firmware updates from device manufacturer"
+        $nextSteps += "Verify device supports UEFI CA 2023 updates"
+    }
+
+    # Check task execution status
+    $taskAction = $actions | Where-Object { $_.Action -eq "StartScheduledTask" } | Select-Object -First 1
+    if ($taskAction) {
+        if (-not $taskAction.TaskFound) {
+            $nextSteps += "Scheduled task '$TaskName' not found - device may be missing Windows components"
+            $nextSteps += "Verify Windows Update KB containing Secure Boot update is installed"
+            $nextSteps += "Check Task Scheduler for task existence at $TaskPath$TaskName"
+            
+        } elseif (-not $taskAction.StartSuccess) {
+            $nextSteps += "Failed to start scheduled task: $($taskAction.Error)"
+            $nextSteps += "Manually run task '$TaskName' from Task Scheduler"
+            
+        } elseif ($taskAction.LastTaskResult -ne $null -and [int]$taskAction.LastTaskResult -ne 0) {
+            $nextSteps += "Task '$TaskName' completed with error code: 0x$([Convert]::ToString($taskAction.LastTaskResult, 16))"
+            $nextSteps += "Check Task Scheduler Operational log for detailed task execution errors"
+        }
+    }
+
+    # Check BitLocker suspension
+    $blAction = $actions | Where-Object { $_.Action -eq "BitLockerSuspendForTwoReboots" } | Select-Object -First 1
+    if ($blAction -and $blAction.Attempted -and -not $blAction.Success) {
+        $nextSteps += "Warning: BitLocker suspension failed - device may prompt for recovery key after firmware update"
+        $nextSteps += "Ensure BitLocker recovery key is available before rebooting"
+    }
+}
+
+#endregion
+
+#region Output Results
+
+$out = [PSCustomObject]@{
+    Status    = $status
+    Reason    = $reason
+    NextSteps = $nextSteps
+    PreState  = $pre
+    Actions   = $actions
+    PostState = $post
+}
+
+$out | ConvertTo-Json -Depth 12 -Compress
+
+if ($compliantNow) {
+    exit 0
+} else {
+    exit 1
+}
+
+#endregion
