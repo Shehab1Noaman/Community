@@ -16,7 +16,20 @@ REPORTING IMPROVEMENTS
 - ExpiringButReplaced / ExpiringAndNotReplaced flags
 - When 1801 is newest, ComplianceReasons includes FirmwareNotAppliedYet and a human-readable FirmwareNotAppliedReason
 - FirmwareNotAppliedReason is derived from the latest 1801 message (first line)
+- Device manufacturer, model, TPM version reporting
+- Reboot pending detection
+- WindowsUEFICA2023Capable validation
+- High Confidence state tracking
 
+.NOTES
+Event ID Reference:
+- 1795: Firmware update preparation failed
+- 1796: Firmware update staging failed
+- 1797: Firmware update application failed
+- 1798: Firmware update verification failed
+- 1799: Firmware update rollback occurred
+- 1801: Firmware update pending (device ready for reboot)
+- 1808: Firmware update successfully applied
 #>
 
 # -----------------------------
@@ -99,7 +112,6 @@ function Get-UefiX509Certs {
             try { 
                 $certs += [System.Security.Cryptography.X509Certificate2]::new($s.Data)
             } catch {
-                # Log or count parsing failures if needed for diagnostics
                 Write-Verbose "Failed to parse cert: $_"
             }
         }
@@ -137,6 +149,26 @@ try {
     $UEFI_FirmwareVersion = $bios.SMBIOSBIOSVersion
 } catch {}
 
+# Device info
+$manufacturer = "Unknown"
+$model = "Unknown"
+try {
+    $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+    $manufacturer = $cs.Manufacturer
+    $model = $cs.Model
+} catch {}
+
+# TPM version
+$tpmVersion = $null
+$tpmPresent = $false
+try {
+    $tpm = Get-CimInstance -Namespace root\cimv2\Security\MicrosoftTpm -ClassName Win32_Tpm -ErrorAction Stop
+    if ($tpm) {
+        $tpmPresent = $true
+        $tpmVersion = $tpm.SpecVersion
+    }
+} catch {}
+
 # Secure Boot enabled?
 $secureBootOn = $null
 try { $secureBootOn = Confirm-SecureBootUEFI -ErrorAction Stop } catch { $secureBootOn = $false }
@@ -161,6 +193,13 @@ try { $MicrosoftUpdateManagedOptIn = (Get-ItemProperty -Path $bootPath -Name "Mi
 
 $osStaged = ($UEFICA2023Status -eq "Updated")
 $hasUEFIError = ($UEFICA2023Error -and $UEFICA2023Error -ne 0)
+$deviceCapable = ($WindowsUEFICA2023Capable -eq 2)
+
+# Reboot pending detection
+$rebootPending = $false
+try {
+    $rebootPending = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
+} catch {}
 
 # -----------------------------
 # TPM-WMI events
@@ -183,7 +222,7 @@ try {
         $latest1808 = $tpmEvents | Where-Object { $_.Id -eq 1808 } | Sort-Object TimeCreated -Descending | Select-Object -First 1
         $latest1801 = $tpmEvents | Where-Object { $_.Id -eq 1801 } | Sort-Object TimeCreated -Descending | Select-Object -First 1
 
-        $latestFailure = $tpmEvents | Where-Object { $_.Id -in 1795,1796,1797,1798,1801 } |
+        $latestFailure = $tpmEvents | Where-Object { $_.Id -in 1795,1796,1797,1798,1799 } |
             Sort-Object TimeCreated -Descending | Select-Object -First 1
 
         $latestTpm = $tpmEvents | Sort-Object TimeCreated -Descending | Select-Object -First 1
@@ -208,7 +247,8 @@ if ($latest1808 -and (-not $latest1801 -or $latest1808.TimeCreated -ge $latest18
 elseif ($latest1801 -and (-not $latest1808 -or $latest1801.TimeCreated -gt $latest1808.TimeCreated)) {
     $firmwarePending = $true
     $firmwareState   = "Pending"
-    $firmwareNotAppliedReason = $latest1801.Message
+    # Extract first line of 1801 message
+    $firmwareNotAppliedReason = Get-FirstLine -Text $latest1801.Message
 }
 
 # Errors after success?
@@ -217,10 +257,10 @@ if ($latest1808 -and $latestFailure -and $latestFailure.TimeCreated -gt $latest1
     $errorsAfterSuccess = $true
 }
 
-# Nice-to-have reporting
+# Event reporting details
 $LatestTPMEventId      = if ($latestTpm) { $latestTpm.Id } else { $null }
 $LatestTPMEventTime    = if ($latestTpm) { $latestTpm.TimeCreated.ToString("o") } else { $null }
-$LatestTPMEventMessage = if ($latestTpm) { (Get-FirstLine -Text $latestTpm.Message) } else { $null }
+$LatestTPMEventMessage = if ($latestTpm) { ($latestTpm.Message) } else { $null }
 $Event1801Confidence   = if ($latest1801) { (Get-ConfidenceFrom1801 -Message $latest1801.Message) } else { $null }
 
 # -----------------------------
@@ -271,7 +311,11 @@ $expiryThreshold = [datetime]::ParseExact('2026-11-01','yyyy-MM-dd',[Globalizati
 $hasExpiringCerts = $false
 $expiringCertList = @()
 
-foreach ($cert in ($KekCerts + $DbCerts)) {
+$allCerts = @()
+$allCerts += $KekCerts
+$allCerts += $DbCerts
+
+foreach ($cert in $allCerts) {
     if ($cert.NotAfter -lt $expiryThreshold) {
         $hasExpiringCerts = $true
         $expiringCertList += "$($cert.Subject) (expires $($cert.NotAfter.ToString('yyyy-MM-dd')))"
@@ -284,50 +328,71 @@ $Has2023ReplacementForWindowsPCA  = $HasWindowsUEFI2023
 $Has2023ReplacementFor3rdPartyUEFI = $HasMicrosoftUEFI2023
 $Has2023ReplacementForOptionRom   = $HasOptionRomUEFI2023
 
-# NEW: clearer “expiring” interpretation
+# Clearer "expiring" interpretation
 $ExpiringButReplaced    = $hasExpiringCerts -and $HasMicrosoftKEK2023 -and $HasWindowsUEFI2023
 $ExpiringAndNotReplaced = $hasExpiringCerts -and (-not $HasMicrosoftKEK2023 -or -not $HasWindowsUEFI2023)
 
 # -----------------------------
-# Compliance logic (reasons include 1801-derived message)
+# Compliance logic
 # -----------------------------
 
 $complianceReasons = @()
 $complianceDetails = @()
 
+# Check 1: Secure Boot must be enabled
 if (-not $secureBootOn) {
     $complianceReasons += "SecureBootDisabled"
     $complianceDetails += "Secure Boot is disabled."
 }
 
+# Check 2: TPM must be present
+if (-not $tpmPresent) {
+    $complianceReasons += "TPMNotPresent"
+    $complianceDetails += "TPM is not detected on this device."
+}
+
+# Check 3: Device must be capable
+if (-not $deviceCapable) {
+    $complianceReasons += "DeviceNotCapable"
+    $complianceDetails += "WindowsUEFICA2023Capable is not 2 (device may not support this update)."
+}
+
+# Check 4: OS must have staged the update
 if (-not $osStaged) {
     $complianceReasons += "UpdateNotStaged"
     $complianceDetails += "UEFICA2023Status is not 'Updated' (OS-side staging not complete)."
 }
 
+# Check 5: No UEFI errors
 if ($hasUEFIError) {
     $complianceReasons += "UEFICA2023ErrorPresent"
-    $complianceDetails += "UEFICA2023Error indicates an error applying updates."
+    $complianceDetails += "UEFICA2023Error indicates an error applying updates (Error code: $UEFICA2023Error)."
 }
 
+# Check 6: No errors after successful application
 if ($errorsAfterSuccess) {
     $complianceReasons += "ErrorsAfterSuccess"
-    $complianceDetails += "Failure events occurred after a success event."
+    $complianceDetails += "Failure events (ID: $latestFailureEventId) occurred after a success event."
 }
 
-# 1801 newest => firmware not applied yet
+# Check 7: Firmware application status
 if ($firmwareState -eq "Pending") {
     $complianceReasons += "FirmwareNotAppliedYet"
     if ($firmwareNotAppliedReason) {
-        $complianceDetails += "Latest 1801: $firmwareNotAppliedReason"
+        $complianceDetails += "Firmware update pending. Reason: $firmwareNotAppliedReason"
     } else {
         $complianceDetails += "Latest TPM-WMI event indicates firmware application is pending."
     }
+    
+    # Add reboot context if pending
+    if ($rebootPending) {
+        $complianceDetails += "System reboot is required to apply the firmware update."
+    }
 }
 elseif ($firmwareState -eq "Unknown") {
-    # If logs missing/cleared, use strong signals to assume applied (still recorded)
+    # If logs missing/cleared, use strong signals to assume applied
     $strongSignals =
-        ($WindowsUEFICA2023Capable -eq 2) -and
+        $deviceCapable -and
         $HasMicrosoftKEK2023 -and
         $HasWindowsUEFI2023 -and
         (-not $hasUEFIError) -and
@@ -338,20 +403,29 @@ elseif ($firmwareState -eq "Unknown") {
         $complianceReasons += "CannotConfirmFirmwareApplied"
         $complianceDetails += "No 1808/1801 events found and strong signals are not all present."
     } else {
+        # Informational - not blocking compliance
         $complianceReasons += "NoEventsFound_AssumedApplied"
-        $complianceDetails += "No 1808/1801 events found; assumed applied based on strong signals."
+        $complianceDetails += "No 1808/1801 events found; assumed applied based on strong signals (capable=$deviceCapable, certs present, no errors)."
     }
 }
 
-# Expiry logic: only a problem if expiring AND replacements are missing
+# Check 8: High Confidence state (informational warning)
+if ($Event1801Confidence -eq "Needs More Data") {
+    $complianceReasons += "NeedsMoreDataForHighConfidence"
+    $complianceDetails += "Event 1801 indicates 'Needs More Data' - device may need more usage time before firmware update."
+}
+
+# Check 9: Expiry logic - only a problem if expiring AND replacements are missing
 if ($ExpiringAndNotReplaced) {
     $complianceReasons += "ExpiringCertsWithout2023Replacement"
     $complianceDetails += "Certificates expire before $($expiryThreshold.ToString('yyyy-MM-dd')) and 2023 replacements are missing."
 }
 
-# Final safe flag:
+# Final compliance determination
 $safe =
     $secureBootOn -and
+    $tpmPresent -and
+    $deviceCapable -and
     $osStaged -and
     (-not $hasUEFIError) -and
     (-not $errorsAfterSuccess) -and
@@ -363,6 +437,18 @@ if ($firmwareState -eq "Unknown") {
     $safe = $safe -and (-not ($complianceReasons -contains "CannotConfirmFirmwareApplied"))
 }
 
+# "Needs More Data" is informational only, doesn't block compliance
+if ($complianceReasons -contains "NeedsMoreDataForHighConfidence" -and $complianceReasons.Count -eq 1) {
+    # Only this reason - still compliant
+    $safe = $true
+}
+
+# NoEventsFound_AssumedApplied is also informational
+if ($complianceReasons -contains "NoEventsFound_AssumedApplied" -and $complianceReasons.Count -eq 1) {
+    # Only this reason - still compliant
+    $safe = $true
+}
+
 # -----------------------------
 # Output JSON
 # -----------------------------
@@ -370,21 +456,31 @@ if ($firmwareState -eq "Unknown") {
 $summary = [PSCustomObject]@{
     Timestamp  = $timestampIso
     Computer   = $computerName
-
+    
+    # Device info
+    Manufacturer = $manufacturer
+    Model        = $model
     UEFI_FirmwareVersion = $UEFI_FirmwareVersion
+    
+    # TPM info
+    TPMPresent = $tpmPresent
+    TPMVersion = $tpmVersion
 
+    # Boot state
     SecureBootOn = $secureBootOn
+    RebootPending = $rebootPending
 
     # Registry state
     UEFICA2023Status         = $UEFICA2023Status
     UEFICA2023Error          = $UEFICA2023Error
     WindowsUEFICA2023Capable = $WindowsUEFICA2023Capable
+    DeviceCapable            = $deviceCapable
     AvailableUpdates         = $AvailableUpdates
     HighConfidenceOptOut     = $HighConfidenceOptOut
     MicrosoftUpdateManagedOptIn = $MicrosoftUpdateManagedOptIn
 
     # Event-driven firmware state
-    FirmwareState          = $firmwareState   # Applied / Pending / Unknown
+    FirmwareState          = $firmwareState
     FirmwareAppliedToUEFI  = $firmwareApplied
     FirmwareApplyPending   = $firmwarePending
     FirmwareNotAppliedReason = $firmwareNotAppliedReason
@@ -429,7 +525,7 @@ $summary = [PSCustomObject]@{
     Has2023ReplacementFor3rdPartyUEFI = $Has2023ReplacementFor3rdPartyUEFI
     Has2023ReplacementForOptionRom    = $Has2023ReplacementForOptionRom
 
-    # NEW: clearer “expiring” interpretation
+    # Clearer "expiring" interpretation
     ExpiringButReplaced    = $ExpiringButReplaced
     ExpiringAndNotReplaced = $ExpiringAndNotReplaced
 
@@ -439,11 +535,11 @@ $summary = [PSCustomObject]@{
     SafeForJune2026   = $safe
 }
 
+# Output and exit
+$summary | ConvertTo-Json -Depth 10 -Compress
 
 if ($safe) { 
-$summary | ConvertTo-Json -Depth 10 -Compress
-exit 0 
+    exit 0 
 } else {
-$summary | ConvertTo-Json -Depth 10 -Compress
-exit 1
+    exit 1
 }
