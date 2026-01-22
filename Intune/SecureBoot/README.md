@@ -1,183 +1,290 @@
-# UEFI Secure Boot 2026 Readiness Detection Script
+# Secure Boot 2026 Readiness (UEFI CA 2023) – Intune Detection + Remediation
 
-## Overview
+This repository contains two PowerShell scripts designed for **Microsoft Intune Proactive Remediations** (or local admin use) to help IT admins **detect** and **remediate** Windows devices that are not yet ready for the Secure Boot certificate lifecycle changes landing in 2026.
 
-This PowerShell detection script for Microsoft Intune checks whether Windows devices have the required 2023 UEFI certificate updates installed and are ready for the upcoming certificate expiration in 2026. The script provides comprehensive diagnostics including BIOS version, registry status, event logs, and full UEFI certificate details.
+The goal is simple:
+- **Detection** answers: **“Is this device safe for June 2026?”**
+- **Remediation** triggers the supported update workflow and returns **clear next steps** (most commonly: reboot)
 
-## Background
+---
 
-In 2026, certain UEFI certificates used for Secure Boot will expire. Microsoft released updates in 2023 to replace these expiring certificates.  This script helps identify devices that: 
-- Have successfully applied the updates
-- Have expiring certificates without 2023 replacements
-- May encounter issues during the update process
-- Are not compliant and require attention
+## Repository structure
 
-## Exit Codes
-
-- **Exit 0**: Compliant (Device is updated and safe for June 2026)
-- **Exit 1**: Not Compliant (Device needs updates or has issues)
-
-## Features
-
-### Comprehensive Checks
-
-1. **BIOS/Firmware Version Detection**
-2. **Secure Boot Status** - Verifies if Secure Boot is enabled
-3. **Registry Analysis** - Checks multiple registry keys: 
-   - `UEFICA2023Status`
-   - `UEFICA2023Error`
-   - `WindowsUEFICA2023Capable`
-   - `AvailableUpdates`
-   - `HighConfidenceOptOut`
-   - `MicrosoftUpdateManagedOptIn`
-4. **Event Log Analysis** - Monitors System event log for: 
-   - Event 1808 (success)
-   - Events 1801, 1795, 1796, 1797, 1798 (failures)
-5. **UEFI Certificate Inspection** - Full parsing of KEK and DB certificates with: 
-   - Subject and Issuer
-   - Thumbprint
-   - Validity dates (NotBefore/NotAfter)
-   - Serial number
-6. **Certificate Expiration Check** - Identifies certificates expiring before July 2026
-7. **2023 Certificate Detection** - Verifies presence of replacement certificates
-
-### Certificate Detection
-
-The script specifically checks for: 
-
-**KEK (Key Exchange Keys):**
-- Microsoft Corporation KEK CA 2011
-- Microsoft KEK 2023 certificates
-
-**DB (Signature Database):**
-- Microsoft UEFI CA 2011
-- Microsoft UEFI CA 2023
-- Windows UEFI CA 2023
-- Option ROM UEFI CA 2023
-
-## Output
-
-The script outputs a JSON object with detailed information: 
-
-```json
-{
-  "Timestamp": "2026-01-05T10:30:00",
-  "Computer": "DESKTOP-ABC123",
-  "UEFI_FirmwareVersion": "1.2.3",
-  "SecureBootOn":  true,
-  "UEFICA2023Status": "Updated",
-  "UEFICA2023Error": null,
-  "WindowsUEFICA2023Capable": 1,
-  "LatestEvent1808": "2025-12-15T08:00:00",
-  "KEK_CertCount": 2,
-  "DB_CertCount": 4,
-  "HasMicrosoftKEK2023": true,
-  "HasWindowsUEFI2023":  true,
-  "HasExpiringCerts": true,
-  "ExpiringCertificates": ["Microsoft Corporation KEK CA 2011 (expires 14-07-2026)"],
-  "Has2023ReplacementCerts": true,
-  "SafeForJune2026": true
-}
+```
+SecureBoot/
+├─ Detect-SecureBoot2026Readiness.ps1
+├─ Remediate-SecureBoot2026Readiness.ps1
+└─ README.md
 ```
 
-## Compliance Logic
+---
 
-A device is considered **compliant** when:
-1.  Secure Boot is enabled
-2. Update status shows "Updated" OR Event 1808 exists
-3. No UEFI errors present
-4. Either: 
-   - No expiring certificates detected, OR
-   - Expiring certificates exist BUT 2023 replacement certificates are present
+## What these scripts help you do
 
-A device is **non-compliant** if:
-- Secure Boot is disabled
-- UEFI errors detected
-- Update not completed
-- Expiring certificates exist without 2023 replacements
+Across a mixed Windows estate, Secure Boot readiness isn’t just “did Windows download something.” You need evidence that:
+- Secure Boot is enabled
+- OS-side staging has completed
+- firmware-side application has completed (or is still pending)
+- firmware isn’t rejecting the update flow
+- you can explain failures quickly (for service desk / OEM escalation)
 
-## Deployment in Intune
+These scripts are built for that real-world workflow:
+- One JSON output object
+- Clear verdict/state fields
+- Intune-friendly exit codes
 
-### Create Detection Script
+---
 
-1. Navigate to **Microsoft Intune admin center**
-2. Go to **Devices** > **Scripts** > **Platform scripts**
-3. Click **Add** > **Windows 10 and later**
-4. Upload `Detect-SecureBoot2026Readiness.ps1`
-5. Configure settings:
-   - **Run this script using the logged-on credentials**:  No
-   - **Enforce script signature check**: No
-   - **Run script in 64-bit PowerShell**: Yes
+# 1) Detection Script – `Detect-SecureBoot2026Readiness.ps1`
 
-### Assign to Devices
+## What it checks
 
-1. Assign to appropriate device groups
-2. Set schedule (recommended: Daily or Weekly)
-3. Review compliance in Intune reports
+### Secure Boot state
+- `Confirm-SecureBootUEFI` → `SecureBootOn`
 
-### Monitor Results
+### Registry servicing state
+Reads:
+- `HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\Servicing`
+  - `UEFICA2023Status`
+  - `UEFICA2023Error`
+  - `WindowsUEFICA2023Capable`
+- `HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot`
+  - `AvailableUpdates`
+  - `HighConfidenceOptOut`
+  - `MicrosoftUpdateManagedOptIn`
 
-- **Compliant devices**: Exit code 0
-- **Non-compliant devices**: Exit code 1
-- Review JSON output for detailed diagnostics
+### TPM-WMI event evidence (System log)
+The script inspects TPM-WMI provider events:
+- **1808** = success (firmware applied)
+- **1801** = staged/pending (not applied yet)
+- **1795–1799** = firmware/update error signals
 
-## Requirements
+It computes:
+- `FirmwareState`: `Applied` / `Pending` / `Unknown`
+- `ErrorsAfterSuccess`: true if failures occur after a success event
 
-- **PowerShell**:  Version 5.1 or higher
-- **Permissions**: Must run with administrator privileges
-- **OS**: Windows 10/11 with UEFI firmware
-- **Secure Boot**: Device must support UEFI Secure Boot
+### Optional UEFI certificate inventory (KEK/DB)
+If the platform and execution context allow it, the script reads UEFI variables via `Get-SecureBootUEFI` and parses X.509 certs from:
+- `KEK`
+- `DB`
 
-## Troubleshooting
+> Note: Some devices (or SYSTEM/Intune context) may return 0 certs even when Secure Boot is enabled. This does not always indicate missing certificates—treat cert inventory as supporting evidence, not the only proof.
 
-### Common Issues
+### Expiry awareness
+- Uses `ExpiryThreshold = 2026-11-01`
+- Flags:
+  - `ExpiringButReplaced`
+  - `ExpiringAndNotReplaced` (this is the actionable one)
 
-**1. "Secure Boot is disabled"**
-- Enable Secure Boot in BIOS/UEFI settings
-- May require clearing existing keys and resetting to factory defaults
+---
 
-**2. "UpdateNotCompleted"**
-- Ensure KB5025885 or later is installed
-- Check Windows Update history
-- Manually trigger Windows Update
+## Exit codes
+- **Exit 0** = Compliant
+- **Exit 1** = Not compliant
 
-**3. "ExpiringCertsWithout2023Replacement"**
-- Device detected expiring certificates but no 2023 replacements
-- May require firmware update from manufacturer
-- Check with OEM for BIOS/UEFI updates
+---
 
-**4. "UEFIErrorsDetected"**
-- Review System event log for events 1801, 1795-1798
-- May indicate hardware incompatibility
-- Contact device manufacturer
+## Output (JSON)
+The detection script outputs a single compressed JSON object including:
+- system identity + firmware version
+- Secure Boot state
+- registry servicing state
+- event-derived firmware state + timestamps
+- (optional) UEFI cert details
+- compliance verdict and reasons
 
-### Event Log Investigation
+Key fields you’ll use daily:
+- `SafeForJune2026`
+- `ComplianceReasons`
+- `ComplianceDetails`
+- `UEFICA2023Status`
+- `UEFICA2023Error`
+- `FirmwareState`
+- `LatestEvent1808`
+- `LatestEvent1801`
+- `LatestFailureEventId`
 
-Check System event log for TPM-WMI provider events:
+---
+
+## How to read the detection output quickly
+
+Start here:
+- ✅ `SafeForJune2026 : true` → SAFE (exit 0)
+- ❌ `SafeForJune2026 : false` → NOT SAFE (exit 1)
+
+If NOT SAFE, immediately read:
+- `ComplianceReasons` (short flags)
+- `ComplianceDetails` (human explanation)
+
+Common patterns:
+- `UEFICA2023Status = NotStarted / InProgress`  
+  Usually means the update workflow hasn’t completed. Often resolved after time + reboot.
+- `FirmwareState = Pending`  
+  1801 is newest; firmware application hasn’t completed yet. Reboot and re-check until 1808 appears.
+- `LatestFailureEventId = 1795` (or 1796–1798)  
+  Firmware rejection patterns—prioritise OEM BIOS/UEFI updates for that model.
+
+---
+
+# 2) Remediation Script – `Remediate-SecureBoot2026Readiness.ps1`
+
+This script is designed to pair with the detection script in **Intune Proactive Remediations**.
+It triggers the workflow and returns **Status/Reason/NextSteps** that you can paste into a ticket.
+
+## What it does (step-by-step)
+
+### Pre-flight
+- Confirms Secure Boot is ON.
+  - If not ON (or can’t be determined), remediation stops and returns `NotCompleted` with next steps.
+- If the device already shows `FirmwareState = Applied` and has no servicing error, it exits **0** (already compliant).
+
+### Action 1: Set AvailableUpdates
+Sets:
+- `HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\AvailableUpdates = 0x5944`
+
+This is the enterprise trigger used to initiate the Secure Boot update workflow.
+
+### Action 2: Start the scheduled task immediately
+Runs:
+- `\Microsoft\Windows\PI\Secure-Boot-Update`
+
+It records:
+- whether the task was found
+- whether it started
+- whether it completed within a short wait window
+- `LastTaskResult` (when available)
+
+> Important: Even if the task starts successfully, firmware-side completion may still require reboot(s) and time.
+
+### Action 3: Suspend BitLocker for two reboots
+If BitLocker protection is ON, it attempts:
+- `Suspend-BitLocker -RebootCount 2`
+Fallback:
+- `manage-bde -protectors -disable C: -RebootCount 2`
+
+This reduces the chance of BitLocker recovery prompts during boot chain/firmware changes.
+If suspension fails, the script warns you so you can ensure recovery keys are available.
+
+### Post-state assessment
+Re-checks:
+- servicing registry values
+- event-derived `FirmwareState`
+
+Then decides:
+- **Completed (exit 0)** if `FirmwareState = Applied` and no servicing error exists
+- **NotCompleted (exit 1)** otherwise, with tailored next steps
+
+---
+
+## Exit codes
+- **Exit 0** = Completed (compliant now)
+- **Exit 1** = NotCompleted (requires action)
+
+---
+
+## Output (JSON)
+The remediation script outputs compressed JSON:
+
+- `Status`: `Completed` / `NotCompleted`
+- `Reason`: single paragraph (ticket-friendly)
+- `NextSteps`: checklist
+- `PreState`: snapshot before changes
+- `Actions`: what it attempted + success/failure evidence
+- `PostState`: snapshot after changes
+
+---
+
+## How to read the remediation output quickly
+
+Start with:
+- `Status`
+- `Reason`
+- `NextSteps`
+
+Most common outcome after triggering:
+- `Status = NotCompleted`
+- `FirmwareState = Pending`
+- `NextSteps` includes **reboot** (often twice if BitLocker was suspended)
+
+That’s not a failure—it usually means the workflow is staged and waiting for reboot completion.
+
+---
+
+# Intune deployment (recommended)
+
+## Option A (Best): Proactive Remediations (Detection + Remediation together)
+
+1. Intune Admin Center → **Reports** (or **Endpoint analytics**) → **Proactive remediations**
+2. Create a new package
+3. Upload:
+   - Detection: `Detect-SecureBoot2026Readiness.ps1`
+   - Remediation: `Remediate-SecureBoot2026Readiness.ps1`
+4. Script settings:
+   - Run using logged-on credentials: **No**
+   - Run script in 64-bit PowerShell: **Yes**
+5. Assign to a pilot device group first
+6. Schedule:
+   - Pilot: Daily
+   - Broad rollout: Weekly (once stable)
+
+## Option B: Platform Scripts (detection only)
+Use this if you only want reporting first.
+
+---
+
+# Local testing (admin)
+
+Run detection:
 ```powershell
-Get-WinEvent -FilterHashtable @{LogName='System'; Id=1808,1801,1795,1796,1797,1798} -MaxEvents 10 | 
-    Where-Object {$_. ProviderName -like "*TPM-WMI*"} | 
-    Format-List TimeCreated, Id, Message
+powershell.exe -ExecutionPolicy Bypass -File .\Detect-SecureBoot2026Readiness.ps1
+echo $LASTEXITCODE
 ```
 
-## Related Resources
+Run remediation:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\Remediate-SecureBoot2026Readiness.ps1
+echo $LASTEXITCODE
+```
 
-- [Microsoft Security Update Guide - UEFI CA](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2023-24932)
-- [KB5025885: UEFI Secure Boot certificate updates](https://support.microsoft.com/kb/5025885)
-- [Managing Secure Boot in Windows](https://learn.microsoft.com/windows-hardware/manufacture/desktop/secure-boot-landing)
+Tip: If you want readable JSON while testing, remove `-Compress` from `ConvertTo-Json`.
 
-## Version History
+---
 
-- **v1.0** (2026-01-05): Initial release with full certificate inspection and 2026 readiness check
+# Troubleshooting matrix (fast)
 
-## License
+## Detection says NOT SAFE
+- **SecureBootDisabled** → enable Secure Boot in BIOS/UEFI
+- **UpdateNotStaged** (`UEFICA2023Status` not Updated) → allow servicing cycle + reboot
+- **FirmwareNotAppliedYet** (`FirmwareState = Pending`) → reboot and re-check until 1808 is newest
+- **UEFICA2023ErrorPresent** → investigate servicing error + related TPM-WMI events
+- **1795/1796/1797/1798 present** → firmware rejection patterns → update OEM BIOS/UEFI first
 
-This script is provided as-is for use in Intune environments. Modify as needed for your organization's requirements. 
+## Remediation returns NotCompleted
+- **Pending** → reboot (twice if BitLocker was suspended), re-run detection
+- **Unknown** → reboot + check TPM-WMI events exist; verify task ran
+- **Task not found** → confirm `\Microsoft\Windows\PI\Secure-Boot-Update` exists and Windows servicing components are present
+- **BitLocker suspension failed** → ensure recovery key is available before rebooting
 
-## Author
+---
 
-Community contribution for Microsoft Intune deployments
+# Notes / operational guidance
 
-## Contributing
+- Don’t mix multiple deployment methods on the same pilot devices during testing.
+- Treat Event 1795+ as a signal to prioritise OEM firmware updates for that model.
+- Expect staged/pending states during rollout—reboots are often part of the completion path.
 
-Contributions, issues, and feature requests are welcome.  Please ensure any modifications maintain backward compatibility with existing Intune deployments.
+---
+
+# Versioning
+- v1.0 – Initial release (Detection + Remediation, JSON reporting, Intune-friendly exit codes)
+
+---
+
+# License
+Provided as-is. Review internally before broad deployment and align with your change control process.
+
+---
+
+# Contributing
+Issues and pull requests are welcome.
+If you modify output fields, keep backward compatibility where possible (Intune reporting and dashboards depend on stable keys).
