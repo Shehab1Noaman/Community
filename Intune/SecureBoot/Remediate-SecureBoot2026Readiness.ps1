@@ -26,8 +26,12 @@ $TaskPath = "\Microsoft\Windows\PI\"
 $TaskName = "Secure-Boot-Update"
 
 # Task completion check timeout (seconds)
-$TaskWaitTimeout = 15
-$TaskCheckInterval = 1
+$TaskWaitTimeout = 30  # Increased from 15 to allow more time for task completion
+$TaskCheckInterval = 2 # Increased from 1 to reduce polling frequency
+$RegistryWriteRetries = 3
+$RegistryWriteRetryDelay = 2
+$TaskStartRetries = 2
+$TaskStartRetryDelay = 3
 
 #region Helper Functions
 
@@ -37,6 +41,19 @@ function Get-RegValue {
         (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name 
     } catch { 
         $null 
+    }
+}
+
+function Get-SafeTimestamp {
+    try {
+        return (Get-Date).ToString("o")
+    } catch {
+        # Fallback to basic string representation if DateTime formatting fails
+        try {
+            return (Get-Date).ToString()
+        } catch {
+            return "Unknown"
+        }
     }
 }
 
@@ -72,7 +89,8 @@ function Get-FirmwareStateFromEvents {
 
     # Event 1808 = firmware applied successfully
     # Event 1801 = firmware updates staged/pending
-    if ($latest1808 -and (-not $latest1801 -or $latest1808.TimeCreated -ge $latest1801.TimeCreated)) {
+    # Fixed: Use strict '>' comparison to avoid ambiguity when timestamps are equal
+    if ($latest1808 -and (-not $latest1801 -or $latest1808.TimeCreated -gt $latest1801.TimeCreated)) {
         $state = "Applied"
     } elseif ($latest1801 -and (-not $latest1808 -or $latest1801.TimeCreated -gt $latest1808.TimeCreated)) {
         $state  = "Pending"
@@ -82,12 +100,20 @@ function Get-FirmwareStateFromEvents {
     [PSCustomObject]@{
         FirmwareState      = $state
         PendingReason      = $reason
-        Latest1801Time     = $(if ($latest1801) { $latest1801.TimeCreated.ToString("o") } else { $null })
-        Latest1808Time     = $(if ($latest1808) { $latest1808.TimeCreated.ToString("o") } else { $null })
-        Latest1799Time     = $(if ($latest1799) { $latest1799.TimeCreated.ToString("o") } else { $null })
+        Latest1801Time     = $(if ($latest1801) { 
+            try { $latest1801.TimeCreated.ToString("o") } catch { (Get-SafeTimestamp) }
+        } else { $null })
+        Latest1808Time     = $(if ($latest1808) { 
+            try { $latest1808.TimeCreated.ToString("o") } catch { (Get-SafeTimestamp) }
+        } else { $null })
+        Latest1799Time     = $(if ($latest1799) { 
+            try { $latest1799.TimeCreated.ToString("o") } catch { (Get-SafeTimestamp) }
+        } else { $null })
         Latest1799Message  = $(if ($latest1799) { (First-Line -Text $latest1799.Message) } else { $null })
         LatestFwErrorId    = $(if ($latestFwErr) { $latestFwErr.Id } else { $null })
-        LatestFwErrorTime  = $(if ($latestFwErr) { $latestFwErr.TimeCreated.ToString("o") } else { $null })
+        LatestFwErrorTime  = $(if ($latestFwErr) { 
+            try { $latestFwErr.TimeCreated.ToString("o") } catch { (Get-SafeTimestamp) }
+        } else { $null })
         LatestFwErrorMsg   = $(if ($latestFwErr) { (First-Line -Text $latestFwErr.Message) } else { $null })
     }
 }
@@ -95,25 +121,55 @@ function Get-FirmwareStateFromEvents {
 function Get-BitLockerProtectionOn {
     param([string]$MountPoint = "C:")
 
+    $result = [PSCustomObject]@{
+        ProtectionOn = $null
+        Method = $null
+        Error = $null
+        Confidence = "Unknown"  # Low, Medium, High
+    }
+
     # Try PowerShell cmdlet first
     try {
         $blv = Get-BitLockerVolume -MountPoint $MountPoint -ErrorAction Stop
-        if ($blv -and $blv.ProtectionStatus) { 
-            return ($blv.ProtectionStatus -eq 'On') 
+        if ($blv -and $null -ne $blv.ProtectionStatus) {
+            $result.ProtectionOn = ($blv.ProtectionStatus -eq 'On')
+            $result.Method = "Get-BitLockerVolume"
+            $result.Confidence = "High"
+            return $result
         }
-    } catch { }
+    } catch {
+        $result.Error = "Get-BitLockerVolume failed: $($_.Exception.Message)"
+    }
 
     # Fallback to manage-bde (works across language versions)
     try {
-        $out = & manage-bde -status $MountPoint 2>$null
-        if ($out) {
+        $out = & manage-bde -status $MountPoint 2>&1
+        if ($LASTEXITCODE -eq 0 -and $out) {
             # Check for "Protection On" pattern (case-insensitive, flexible whitespace)
-            if ($out -match "Protection\s+(On|Status:\s*On)") { return $true }
-            if ($out -match "Protection\s+(Off|Status:\s*Off)") { return $false }
+            if ($out -match "Protection\s+(On|Status:\s*On)") {
+                $result.ProtectionOn = $true
+                $result.Method = "manage-bde"
+                $result.Confidence = "Medium"
+                return $result
+            }
+            if ($out -match "Protection\s+(Off|Status:\s*Off)") {
+                $result.ProtectionOn = $false
+                $result.Method = "manage-bde"
+                $result.Confidence = "Medium"
+                return $result
+            }
+            # manage-bde ran but couldn't parse status
+            $result.Method = "manage-bde"
+            $result.Confidence = "Low"
+            $result.Error = "manage-bde output could not be parsed"
+        } else {
+            $result.Error = "manage-bde failed with exit code $LASTEXITCODE"
         }
-    } catch { }
+    } catch {
+        $result.Error = "manage-bde exception: $($_.Exception.Message)"
+    }
 
-    return $null
+    return $result
 }
 
 function Suspend-BitLockerTwoReboots {
@@ -124,14 +180,27 @@ function Suspend-BitLockerTwoReboots {
         Success   = $false
         Method    = $null
         Message   = $null
+        Confidence = $null
     }
 
-    $protOn = Get-BitLockerProtectionOn -MountPoint $MountPoint
-    if ($protOn -ne $true) {
+    $blStatus = Get-BitLockerProtectionOn -MountPoint $MountPoint
+    
+    # If confidence is too low, warn but don't block
+    if ($blStatus.Confidence -eq "Unknown" -or $blStatus.Confidence -eq "Low") {
+        $result.Attempted = $false
+        $result.Success   = $false
+        $result.Method    = "Detection"
+        $result.Confidence = $blStatus.Confidence
+        $result.Message   = "BitLocker status could not be reliably determined. Error: $($blStatus.Error). Proceeding without suspension (user may need recovery key)."
+        return $result
+    }
+
+    if ($blStatus.ProtectionOn -ne $true) {
         $result.Attempted = $false
         $result.Success   = $true
         $result.Method    = "NotNeeded"
-        $result.Message   = $(if ($protOn -eq $false) { 
+        $result.Confidence = $blStatus.Confidence
+        $result.Message   = $(if ($blStatus.ProtectionOn -eq $false) { 
             "BitLocker protection is OFF (no suspend required)." 
         } else { 
             "BitLocker status unknown; not suspending." 
@@ -140,6 +209,7 @@ function Suspend-BitLockerTwoReboots {
     }
 
     $result.Attempted = $true
+    $result.Confidence = $blStatus.Confidence
 
     # Try PowerShell cmdlet first
     try {
@@ -183,28 +253,167 @@ function Wait-ForTaskCompletion {
     param(
         [string]$TaskPath,
         [string]$TaskName,
-        [int]$TimeoutSeconds = 15
+        [int]$TimeoutSeconds = 30
     )
     
-    $elapsed = 0
-    while ($elapsed -lt $TimeoutSeconds) {
+    $startTime = Get-Date
+    $lastState = $null
+    
+    while (((Get-Date) - $startTime).TotalSeconds -lt $TimeoutSeconds) {
         Start-Sleep -Seconds $TaskCheckInterval
-        $elapsed += $TaskCheckInterval
         
         try {
             $taskInfo = Get-ScheduledTaskInfo -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
-            # State 3 = Ready (completed), State 4 = Disabled
-            if ($taskInfo.LastTaskResult -ne $null -and 
-                $taskInfo.LastRunTime -gt (Get-Date).AddSeconds(-$TimeoutSeconds)) {
-                return $taskInfo
+            $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+            
+            $currentState = $task.State
+            
+            # Task states: 0=Unknown, 1=Disabled, 2=Queued, 3=Ready, 4=Running
+            # Ready (3) means task has completed and is ready to run again
+            if ($currentState -eq 3) {
+                # Verify the task actually ran recently (within our timeout window)
+                if ($taskInfo.LastRunTime -and 
+                    $taskInfo.LastRunTime -gt $startTime.AddSeconds(-5)) {
+                    return [PSCustomObject]@{
+                        Completed = $true
+                        State = $currentState
+                        LastTaskResult = $taskInfo.LastTaskResult
+                        LastRunTime = $taskInfo.LastRunTime
+                        TimedOut = $false
+                    }
+                }
             }
+            
+            $lastState = $currentState
+            
         } catch {
-            return $null
+            return [PSCustomObject]@{
+                Completed = $false
+                State = $null
+                LastTaskResult = $null
+                LastRunTime = $null
+                TimedOut = $false
+                Error = $_.Exception.Message
+            }
         }
     }
     
-    # Timeout reached
-    return $null
+    # Timeout reached - get final state
+    try {
+        $taskInfo = Get-ScheduledTaskInfo -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+        
+        return [PSCustomObject]@{
+            Completed = $false
+            State = $task.State
+            LastTaskResult = $taskInfo.LastTaskResult
+            LastRunTime = $taskInfo.LastRunTime
+            TimedOut = $true
+        }
+    } catch {
+        return [PSCustomObject]@{
+            Completed = $false
+            State = $null
+            LastTaskResult = $null
+            LastRunTime = $null
+            TimedOut = $true
+            Error = $_.Exception.Message
+        }
+    }
+}
+
+function Set-AvailableUpdatesWithRetry {
+    param(
+        [string]$Path,
+        [int]$Value,
+        [int]$MaxRetries = 3,
+        [int]$RetryDelay = 2
+    )
+    
+    $result = [PSCustomObject]@{
+        Success = $false
+        Attempts = 0
+        Verified = $false
+        Error = $null
+    }
+    
+    for ($i = 1; $i -le $MaxRetries; $i++) {
+        $result.Attempts = $i
+        
+        try {
+            # Ensure path exists
+            if (-not (Test-Path $Path)) {
+                New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
+            }
+            
+            # Write the value
+            New-ItemProperty -Path $Path -Name "AvailableUpdates" -PropertyType DWord -Value $Value -Force -ErrorAction Stop | Out-Null
+            
+            # Verify the write
+            Start-Sleep -Milliseconds 500  # Brief pause to ensure registry flush
+            $readBack = Get-RegValue -Path $Path -Name "AvailableUpdates"
+            
+            if ($null -ne $readBack -and $readBack -eq $Value) {
+                $result.Success = $true
+                $result.Verified = $true
+                return $result
+            } else {
+                $result.Error = "Verification failed: Read value '$readBack' does not match expected '$Value'"
+            }
+            
+        } catch {
+            $result.Error = $_.Exception.Message
+        }
+        
+        # Retry if not successful and not last attempt
+        if (-not $result.Success -and $i -lt $MaxRetries) {
+            Start-Sleep -Seconds $RetryDelay
+        }
+    }
+    
+    return $result
+}
+
+function Start-ScheduledTaskWithRetry {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName,
+        [int]$MaxRetries = 2,
+        [int]$RetryDelay = 3
+    )
+    
+    $result = [PSCustomObject]@{
+        TaskFound = $false
+        StartAttempts = 0
+        StartSuccess = $false
+        Error = $null
+    }
+    
+    try {
+        $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+        $result.TaskFound = $true
+    } catch {
+        $result.Error = "Task not found: $($_.Exception.Message)"
+        return $result
+    }
+    
+    for ($i = 1; $i -le $MaxRetries; $i++) {
+        $result.StartAttempts = $i
+        
+        try {
+            Start-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
+            $result.StartSuccess = $true
+            return $result
+        } catch {
+            $result.Error = $_.Exception.Message
+            
+            if ($i -lt $MaxRetries) {
+                Start-Sleep -Seconds $RetryDelay
+            }
+        }
+    }
+    
+    return $result
 }
 
 #endregion
@@ -221,7 +430,7 @@ try {
 }
 
 $pre = [PSCustomObject]@{
-    Timestamp                 = (Get-Date).ToString("o")
+    Timestamp                 = (Get-SafeTimestamp)
     Computer                  = $env:COMPUTERNAME
     SecureBootOn              = $secureBootOn
     UEFICA2023Status          = (Get-RegValue $SBServ "UEFICA2023Status")
@@ -269,80 +478,82 @@ if (($pre.Firmware.FirmwareState -eq "Applied") -and (-not $preHasError)) {
 
 #region Remediation Actions
 
-# Action 1: Set AvailableUpdates registry value (0x5944 = UEFI CA 2023)
-$setAU = [PSCustomObject]@{
-    Action  = "SetAvailableUpdates"
-    Target  = "$SBRoot\AvailableUpdates"
-    Value   = "0x5944"
-    Success = $false
-    Error   = $null
-}
-try {
-    if (-not (Test-Path $SBRoot)) {
-        New-Item -Path $SBRoot -Force -ErrorAction Stop | Out-Null
-    }
-    New-ItemProperty -Path $SBRoot -Name "AvailableUpdates" -PropertyType DWord -Value 0x5944 -Force -ErrorAction Stop | Out-Null
-    $setAU.Success = $true
-} catch {
-    $setAU.Error = $_.Exception.Message
-}
-$actions.Add($setAU)
+# Action 1: Set AvailableUpdates registry value with retry and verification
+$setAU = Set-AvailableUpdatesWithRetry -Path $SBRoot -Value 0x5944 -MaxRetries $RegistryWriteRetries -RetryDelay $RegistryWriteRetryDelay
+$actions.Add([PSCustomObject]@{
+    Action   = "SetAvailableUpdates"
+    Target   = "$SBRoot\AvailableUpdates"
+    Value    = "0x5944"
+    Success  = $setAU.Success
+    Verified = $setAU.Verified
+    Attempts = $setAU.Attempts
+    Error    = $setAU.Error
+})
 
-# Action 2: Start Scheduled Task to apply firmware update
+# Action 2: Start Scheduled Task with retry
+$taskStart = Start-ScheduledTaskWithRetry -TaskPath $TaskPath -TaskName $TaskName -MaxRetries $TaskStartRetries -RetryDelay $TaskStartRetryDelay
+
 $startTask = [PSCustomObject]@{
     Action         = "StartScheduledTask"
     Task           = "$TaskPath$TaskName"
-    TaskFound      = $false
-    StartAttempt   = $false
-    StartSuccess   = $false
-    LastTaskResult = $null
+    TaskFound      = $taskStart.TaskFound
+    StartAttempts  = $taskStart.StartAttempts
+    StartSuccess   = $taskStart.StartSuccess
     TaskWaitTime   = 0
-    Error          = $null
+    TaskCompleted  = $false
+    TaskState      = $null
+    LastTaskResult = $null
+    TimedOut       = $false
+    Error          = $taskStart.Error
 }
-try {
-    $task = Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ($task) {
-        $startTask.TaskFound = $true
-        $startTask.StartAttempt = $true
-        
-        # Record time before starting
-        $startTime = Get-Date
-        Start-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction Stop
-        $startTask.StartSuccess = $true
 
-        # Wait for task to complete or timeout
-        $taskInfo = Wait-ForTaskCompletion -TaskPath $TaskPath -TaskName $TaskName -TimeoutSeconds $TaskWaitTimeout
-        $startTask.TaskWaitTime = ((Get-Date) - $startTime).TotalSeconds
-        
-        if ($taskInfo) {
-            $startTask.LastTaskResult = $taskInfo.LastTaskResult
-        } else {
-            $startTask.Error = "Task did not complete within $TaskWaitTimeout seconds"
+if ($taskStart.StartSuccess) {
+    $startTime = Get-Date
+    $waitResult = Wait-ForTaskCompletion -TaskPath $TaskPath -TaskName $TaskName -TimeoutSeconds $TaskWaitTimeout
+    $startTask.TaskWaitTime = ((Get-Date) - $startTime).TotalSeconds
+    $startTask.TaskCompleted = $waitResult.Completed
+    $startTask.TaskState = $waitResult.State
+    $startTask.TimedOut = $waitResult.TimedOut
+    
+    # Safe conversion of LastTaskResult to integer
+    if ($null -ne $waitResult.LastTaskResult) {
+        try {
+            $startTask.LastTaskResult = [int]$waitResult.LastTaskResult
+        } catch {
+            $startTask.LastTaskResult = $waitResult.LastTaskResult  # Keep as-is if conversion fails
+            if (-not $startTask.Error) {
+                $startTask.Error = "Could not parse LastTaskResult as integer"
+            }
         }
-    } else {
-        $startTask.Error = "Scheduled task not found"
     }
-} catch {
-    $startTask.Error = $_.Exception.Message
+    
+    if ($waitResult.Error) {
+        $startTask.Error = $waitResult.Error
+    }
 }
+
 $actions.Add($startTask)
 
 # Action 3: Suspend BitLocker to prevent recovery prompts during firmware update
 $bl = Suspend-BitLockerTwoReboots -MountPoint "C:"
 $actions.Add([PSCustomObject]@{
-    Action    = "BitLockerSuspendForTwoReboots"
-    Attempted = $bl.Attempted
-    Success   = $bl.Success
-    Method    = $bl.Method
-    Message   = $bl.Message
+    Action     = "BitLockerSuspendForTwoReboots"
+    Attempted  = $bl.Attempted
+    Success    = $bl.Success
+    Method     = $bl.Method
+    Confidence = $bl.Confidence
+    Message    = $bl.Message
 })
 
 #endregion
 
 #region Post-State Assessment
 
+# Wait a moment for events to be written after task execution
+Start-Sleep -Seconds 2
+
 $post = [PSCustomObject]@{
-    Timestamp                 = (Get-Date).ToString("o")
+    Timestamp                 = (Get-SafeTimestamp)
     Computer                  = $env:COMPUTERNAME
     SecureBootOn              = $secureBootOn
     UEFICA2023Status          = (Get-RegValue $SBServ "UEFICA2023Status")
@@ -388,10 +599,15 @@ if ($compliantNow) {
     }
 
     # Check for critical action failures
-    if (-not $setAU.Success) {
-        $reason += " CRITICAL: Failed to set AvailableUpdates registry value."
+    $auAction = $actions | Where-Object { $_.Action -eq "SetAvailableUpdates" } | Select-Object -First 1
+    if ($auAction -and -not $auAction.Success) {
+        $reason += " CRITICAL: Failed to set AvailableUpdates registry value after $($auAction.Attempts) attempts."
         $nextSteps += "Verify administrative privileges and registry access"
         $nextSteps += "Manually verify HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\AvailableUpdates = 0x5944"
+        $nextSteps += "Error details: $($auAction.Error)"
+    } elseif ($auAction -and -not $auAction.Verified) {
+        $nextSteps += "Warning: Registry write succeeded but verification failed"
+        $nextSteps += "Manually check registry value: $($auAction.Target)"
     }
 
     # Check for servicing errors
@@ -423,20 +639,42 @@ if ($compliantNow) {
             $nextSteps += "Check Task Scheduler for task existence at $TaskPath$TaskName"
             
         } elseif (-not $taskAction.StartSuccess) {
-            $nextSteps += "Failed to start scheduled task: $($taskAction.Error)"
+            $nextSteps += "Failed to start scheduled task after $($taskAction.StartAttempts) attempts: $($taskAction.Error)"
             $nextSteps += "Manually run task '$TaskName' from Task Scheduler"
             
-        } elseif ($taskAction.LastTaskResult -ne $null -and [int]$taskAction.LastTaskResult -ne 0) {
-            $nextSteps += "Task '$TaskName' completed with error code: 0x$([Convert]::ToString($taskAction.LastTaskResult, 16))"
+        } elseif ($taskAction.TimedOut) {
+            $nextSteps += "Task '$TaskName' did not complete within $TaskWaitTimeout seconds (may still be running)"
+            $nextSteps += "Wait 2-5 minutes and check Task Scheduler for task status"
+            $nextSteps += "Check System event log for TPM-WMI events after task completes"
+            
+        } elseif (-not $taskAction.TaskCompleted) {
+            $nextSteps += "Task '$TaskName' execution status unclear (State: $($taskAction.TaskState))"
+            $nextSteps += "Check Task Scheduler for detailed task status"
+            
+        } elseif ($null -ne $taskAction.LastTaskResult -and $taskAction.LastTaskResult -ne 0) {
+            # Safe hex conversion
+            try {
+                $hexCode = "0x$([Convert]::ToString([int]$taskAction.LastTaskResult, 16))"
+            } catch {
+                $hexCode = $taskAction.LastTaskResult
+            }
+            $nextSteps += "Task '$TaskName' completed with error code: $hexCode"
             $nextSteps += "Check Task Scheduler Operational log for detailed task execution errors"
         }
     }
 
     # Check BitLocker suspension
     $blAction = $actions | Where-Object { $_.Action -eq "BitLockerSuspendForTwoReboots" } | Select-Object -First 1
-    if ($blAction -and $blAction.Attempted -and -not $blAction.Success) {
-        $nextSteps += "Warning: BitLocker suspension failed - device may prompt for recovery key after firmware update"
-        $nextSteps += "Ensure BitLocker recovery key is available before rebooting"
+    if ($blAction) {
+        if ($blAction.Attempted -and -not $blAction.Success) {
+            $nextSteps += "WARNING: BitLocker suspension failed - device may prompt for recovery key after firmware update"
+            $nextSteps += "Ensure BitLocker recovery key is available before rebooting"
+            $nextSteps += "Error: $($blAction.Message)"
+        } elseif (-not $blAction.Attempted -and $blAction.Confidence -in @("Unknown", "Low")) {
+            $nextSteps += "WARNING: BitLocker status could not be determined reliably"
+            $nextSteps += "Have BitLocker recovery key available as a precaution"
+            $nextSteps += "Details: $($blAction.Message)"
+        }
     }
 }
 
