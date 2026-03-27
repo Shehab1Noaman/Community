@@ -1,4 +1,3 @@
-#requires -Version 5.1
 <#
 .SYNOPSIS
     Intune detection script — MDE Sense service health check.
@@ -7,8 +6,8 @@
     Performs the following checks and exits 0 (healthy) or 1 (unhealthy):
 
     1. OnboardingState registry value equals 1 (device is onboarded to MDE).
-    2. On Windows builds >= 26100, the DISM optional capability
-       "Microsoft.Windows.Sense.Client~~~~0.0.1.0" is in the Installed state.
+    2. On Windows 11 24H2+ workstations (build >= 26100), the optional capability
+       "Microsoft.Windows.Sense.Client~~~~" is in the Installed state.
     3. The "sense" Windows service exists and its Status is Running.
     4. The Microsoft-Windows-SENSE/Operational event log is accessible.
 
@@ -20,20 +19,18 @@
     Designed for use as an Intune Proactive Remediation detection script or
     an Intune Custom Compliance detection script.
 
-    The unhealthy output is written as a single semicolon-delimited line so
-    that Intune can capture it cleanly as a single compliance string.
+    Outputs a single-line JSON object for cleaner Intune reporting.
 #>
 
 $ErrorActionPreference = 'Stop'
 $issues = [System.Collections.Generic.List[string]]::new()
 
-# --------------------------------------------------
-# Helper: safely read a single registry value
-# --------------------------------------------------
+$CapabilityName = 'Microsoft.Windows.Sense.Client~~~~'
+
 function Get-RegistryValue {
     param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Name
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name
     )
     try {
         return (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name
@@ -43,113 +40,111 @@ function Get-RegistryValue {
     }
 }
 
-# --------------------------------------------------
-# Helper: query the Sense DISM optional capability
-# Stdout and stderr are captured separately so that
-# stderr details can be surfaced in issue messages.
-# --------------------------------------------------
 function Get-SenseCapabilityState {
-    $stdoutFile = [System.IO.Path]::GetTempFileName()
-    $stderrFile = [System.IO.Path]::GetTempFileName()
-
     try {
-        $proc = Start-Process -FilePath 'dism.exe' `
-            -ArgumentList '/Online', '/Get-CapabilityInfo', '/CapabilityName:Microsoft.Windows.Sense.Client~~~~0.0.1.0' `
-            -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput $stdoutFile `
-            -RedirectStandardError $stderrFile
-
-        $exitCode  = $proc.ExitCode
-        $stdout    = Get-Content -Path $stdoutFile -Raw -ErrorAction SilentlyContinue
-        $stderr    = Get-Content -Path $stderrFile -Raw -ErrorAction SilentlyContinue
-
-        $state = $null
-        if ($exitCode -eq 0) {
-            $match = $stdout | Select-String -Pattern '^\s*State\s*:\s*(.+)$' | Select-Object -First 1
-            if ($match) {
-                $state = $match.Matches.Groups[1].Value.Trim()
-            }
-        }
-
-        [PSCustomObject]@{
-            ExitCode = $exitCode
-            State    = $state
-            Stdout   = $stdout
-            Stderr   = $stderr
+        $cap = Get-WindowsCapability -Online -Name $CapabilityName -ErrorAction Stop
+        return [PSCustomObject]@{
+            Name  = $cap.Name
+            State = $cap.State.ToString()
+            Error = $null
         }
     }
-    finally {
-        Remove-Item -Path $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
+    catch {
+        return [PSCustomObject]@{
+            Name  = $CapabilityName
+            State = $null
+            Error = $_.Exception.Message
+        }
     }
 }
 
-# --------------------------------------------------
-# Check 1: Windows build number (used for capability
-# check gate). Use TryParse so a missing/non-numeric
-# registry value does not throw.
-# --------------------------------------------------
-$rawBuild = Get-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuildNumber'
-$build    = 0
-if (-not [int]::TryParse($rawBuild, [ref]$build)) {
-    $issues.Add("Could not read Windows build number (registry value: '$rawBuild'). Capability check skipped.")
-}
 
-# --------------------------------------------------
-# Check 2: MDE onboarding state
-# --------------------------------------------------
-$onboardingState = Get-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection\Status' -Name 'OnboardingState'
+# Check 3: MDE onboarding state
+$onboardingState = Get-RegistryValue `
+    -Path 'HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection\Status' `
+    -Name 'OnboardingState'
 
 if ($null -eq $onboardingState -or [int]$onboardingState -ne 1) {
     $issues.Add("OnboardingState is '$onboardingState' (expected 1).")
 }
 
-# --------------------------------------------------
-# Check 3: Sense optional capability (Windows 11 24H2+)
-# Only checked on builds >= 26100
-# --------------------------------------------------
-if ($build -ge 26100) {
+# Check 4: Sense optional capability
+$capabilityChecked = $false
+$capabilityState = $null
+if ($build -ge 26100 -and $isWorkstation) {
+    $capabilityChecked = $true
     $cap = Get-SenseCapabilityState
+    $capabilityState = $cap.State
 
-    if ($cap.ExitCode -ne 0) {
-        $stderrDetail = if (-not [string]::IsNullOrWhiteSpace($cap.Stderr)) { " Stderr: $($cap.Stderr.Trim())" } else { '' }
-        $issues.Add("Failed to query Sense capability. DISM exit code: $($cap.ExitCode).$stderrDetail")
+    if ($null -ne $cap.Error) {
+        $issues.Add("Failed to query Sense capability '$CapabilityName'. Error: $($cap.Error)")
     }
     elseif ($cap.State -ne 'Installed') {
-        $issues.Add("Sense capability state is '$($cap.State)' (expected Installed).")
+        $issues.Add("Sense capability '$($cap.Name)' state is '$($cap.State)' (expected Installed).")
     }
 }
 
-# --------------------------------------------------
-# Check 4: Sense Windows service status
-# Also captures StartType to distinguish Disabled
-# from simply Stopped.
-# --------------------------------------------------
+# Check 5: Sense Windows service
 $service = Get-Service -Name 'sense' -ErrorAction SilentlyContinue
+$serviceStatus = $null
+$serviceStartMode = $null
+
 if (-not $service) {
     $issues.Add("Sense service is missing.")
 }
-elseif ($service.Status -ne 'Running') {
-    $issues.Add("Sense service is '$($service.Status)' with StartType '$($service.StartType)' (expected Running).")
+else {
+    $serviceStatus = $service.Status.ToString()
+
+    if ($service.Status -ne 'Running') {
+        try {
+            $svcCim = Get-CimInstance Win32_Service -Filter "Name='sense'" -ErrorAction Stop
+            $serviceStartMode = $svcCim.StartMode
+        }
+        catch {
+            $serviceStartMode = 'Unknown'
+        }
+
+        $issues.Add("Sense service is '$serviceStatus' with StartMode '$serviceStartMode' (expected Running).")
+    }
+    else {
+        try {
+            $svcCim = Get-CimInstance Win32_Service -Filter "Name='sense'" -ErrorAction Stop
+            $serviceStartMode = $svcCim.StartMode
+        }
+        catch {
+            $serviceStartMode = 'Unknown'
+        }
+    }
 }
 
-# --------------------------------------------------
-# Check 5: SENSE operational event log accessibility
-# --------------------------------------------------
+# Check 6: SENSE operational event log accessibility
+$logAccessible = $false
 try {
     $null = Get-WinEvent -ListLog 'Microsoft-Windows-SENSE/Operational' -ErrorAction Stop
+    $logAccessible = $true
 }
 catch {
-    $issues.Add("Microsoft-Windows-SENSE/Operational log is missing or inaccessible. Error: $($_.Exception.Message)")
+    $issues.Add("Microsoft-Windows-SENSE/Operational log is inaccessible. Error: $($_.Exception.Message)")
 }
 
-# --------------------------------------------------
-# Output: single line for Intune compatibility
-# --------------------------------------------------
+# Build JSON output
+$result = [ordered]@{
+    status            = if ($issues.Count -gt 0) { 'Unhealthy' } else { 'Healthy' }
+    capabilityName    = $CapabilityName
+    capabilityState   = $capabilityState
+    senseService      = [ordered]@{
+        exists     = [bool]($null -ne $service)
+        status     = $serviceStatus
+        startMode  = $serviceStartMode
+    }
+    senseLogAccessible = $logAccessible
+    issues            = @($issues)
+}
+
+$result | ConvertTo-Json -Compress -Depth 4 | Write-Output
+
 if ($issues.Count -gt 0) {
-    Write-Output "Unhealthy: $($issues -join '; ')"
     exit 1
 }
 
-$capabilityNote = if ($build -ge 26100) { ', Sense capability is installed' } else { '' }
-Write-Output "Healthy: OnboardingState=1$capabilityNote, Sense log exists, and Sense service is running. WindowsBuild=$build."
 exit 0
