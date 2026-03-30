@@ -180,17 +180,6 @@ The remediation script attempts to:
 | **Run context** | `SYSTEM` |
 | **Architecture** | `64-bit PowerShell` |
 
-### Optional Parameter
-
-The remediation script supports an optional `-CapabilitySource` parameter:
-
-```powershell
--CapabilitySource "\\server\FoDRepo"
-```
-
-> Use this when devices **cannot retrieve Features on Demand** content from Windows Update or your normal servicing source.
-
----
 
 ## Supported Scenarios
 
