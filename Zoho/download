@@ -1,0 +1,20 @@
+# PowerShell
+*.ps1xml
+*.pssc
+*.psrc
+
+# Local secrets / token cache
+ZohoTokens.json
+*ZohoTokens.json
+.env
+.env.*
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
