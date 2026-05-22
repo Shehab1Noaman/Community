@@ -124,7 +124,7 @@ When contributing:
 
 ## License
 
-Please review the license information included in individual project folders where applicable.
+This repository is licensed under the **MIT License**. See the `LICENSE` file for details.
 
 ## Disclaimer
 
