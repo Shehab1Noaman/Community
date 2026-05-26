@@ -1,0 +1,7 @@
+{
+  "_comment": "Per-workload object-type apply toggles for Teams. Items tagged [APPLY] are the only ones Import-M365TenantConfig writes back today (MeetingPolicies via Set-CsTeamsMeetingPolicy, when present in backup). The rest are export/compare only and the flag has no effect on the apply phase yet.",
+
+  "AutoAttendantPolicies": true,
+  "CallQueues": true,
+  "MeetingPolicies": true
+}

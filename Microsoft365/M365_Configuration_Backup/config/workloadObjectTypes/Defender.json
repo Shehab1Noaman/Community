@@ -1,0 +1,6 @@
+{
+  "_comment": "Per-workload object-type apply toggles for Defender. Restore is export-first today; nothing here is wired for write-back yet. SecureScores/SecureScoreControlProfiles are read-only telemetry from Microsoft Graph and cannot be restored.",
+
+  "SecureScoreControlProfiles": true,
+  "SecureScores": true
+}

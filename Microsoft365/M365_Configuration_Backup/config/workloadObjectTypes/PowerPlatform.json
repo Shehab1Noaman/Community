@@ -1,0 +1,6 @@
+{
+  "_comment": "Per-workload object-type apply toggles for Power Platform. Restore is export-first today; nothing here is wired for write-back yet.",
+
+  "DlpPolicies": true,
+  "DlpPolicyConnectorConfigurations": true
+}

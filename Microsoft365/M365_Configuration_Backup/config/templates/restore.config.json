@@ -1,0 +1,72 @@
+{
+  "_comment": "Copy this file to restore.config.json and fill in your tenant values. restore.config.json is gitignored and must never be committed.",
+  "source": {
+    "_comment": "backupPath: full path to the backup snapshot folder produced by Export-M365TenantConfig. This is the folder that contains metadata.json, e.g. C:\\M365Backup\\output\\contoso.onmicrosoft.com\\20260428-120000",
+    "backupPath": "C:\\M365Backup\\output"
+  },
+  "scope": {
+    "_comment": "mode: 'Workload' (restore selected workloads) | 'File' (restore specific files) | 'Object' (restore specific named objects). Start with 'Workload' and disable workloads you don't want to restore.",
+    "mode": "Workload",
+    "workloadSwitches": {
+      "EntraID": true,
+      "ExchangeOnline": true,
+      "Teams": true,
+      "SharePoint": true,
+      "Intune": true,
+      "Compliance": true,
+      "Defender": true,
+      "PowerPlatform": true,
+      "Planner": true,
+      "Users": true
+    },
+    "workloadObjectTypes": {
+      "_comment": "Per-workload apply toggles live in separate files at scope.workloadObjectTypesPath. Override specific object types here, e.g. add \"Intune\": { \"Scripts\": true } to restore only Intune scripts."
+    },
+    "workloadObjectTypesPath": "./config/workloadObjectTypes",
+    "workloads": [],
+    "relativeFolder": "",
+    "files": [],
+    "objectNames": []
+  },
+  "target": {
+    "_comment": "mode: 'SameTenant' (restore to source tenant) | 'AnotherTenant' (cross-tenant restore — also fill in remap block). tenantName and tenantId must match the target, not the source.",
+    "mode": "SameTenant",
+    "tenantName": "<YOUR_TENANT>.onmicrosoft.com",
+    "tenantId": "<YOUR_TENANT_ID_GUID>"
+  },
+  "authentication": {
+    "_comment": "Credentials for the restore app registration (needs ReadWrite permissions). clientId = App (client) ID from Entra ID portal. certificateThumbprint = thumbprint of cert in Cert:\\CurrentUser\\My or Cert:\\LocalMachine\\My.",
+    "mode": "AppCertificate",
+    "clientId": "<YOUR_RESTORE_APP_CLIENT_ID>",
+    "certificateThumbprint": "<YOUR_CERTIFICATE_THUMBPRINT>"
+  },
+  "compareAuthentication": {
+    "_comment": "Optional. Read-only app used ONLY for the compare-snapshot export phase. If omitted, the restore app above is used for both phases. Recommended: reuse your backup app here to avoid granting write permissions twice.",
+    "mode": "AppCertificate",
+    "clientId": "<YOUR_BACKUP_APP_CLIENT_ID>",
+    "certificateThumbprint": "<YOUR_CERTIFICATE_THUMBPRINT>"
+  },
+  "sharePointAdminUrl": "https://<YOUR_TENANT>-admin.sharepoint.com/",
+  "execution": {
+    "_comment": "stopOnError: stop the restore run on first workload failure. force: suppress per-object [Y/N] confirmation prompts (equivalent to passing -Force on the command line — use for unattended/CI runs).",
+    "stopOnError": false,
+    "force": false
+  },
+  "prechecks": {
+    "_comment": "Pass -SkipPrechecks on the command line to bypass all checks for one run.",
+    "enabled": true,
+    "requireAllRequiredModules": true,
+    "requireValidConfig": true,
+    "requireValidCertificate": true,
+    "requireWritableOutput": true,
+    "requireValidBackupSource": true,
+    "checkGraphPermissions": true,
+    "createMissingFolders": true
+  },
+  "report": {
+    "_comment": "outputRoot: where restore reports (HTML, JSON, Markdown, logs) are written. A timestamped subfolder is created per run.",
+    "outputRoot": "C:\\M365Backup\\Restore",
+    "includeWarnings": true,
+    "includeTranscript": true
+  }
+}

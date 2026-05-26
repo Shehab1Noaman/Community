@@ -1,0 +1,51 @@
+name: Backup M365 Tenant Config
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  backup:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Modules
+        shell: pwsh
+        run: |
+          $modules = @(
+            'Microsoft.Graph.Authentication',
+            'ExchangeOnlineManagement',
+            'MicrosoftTeams',
+            'Microsoft.Online.SharePoint.PowerShell',
+            'Pester'
+          )
+          foreach ($m in $modules) {
+            if (-not (Get-Module -ListAvailable -Name $m)) {
+              Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber
+            }
+          }
+
+      - name: Run Backup
+        shell: pwsh
+        env:
+          TENANT_ID: ${{ secrets.M365_TENANT_ID }}
+          CLIENT_ID: ${{ secrets.M365_CLIENT_ID }}
+          CERT_THUMBPRINT: ${{ secrets.M365_CERT_THUMBPRINT }}
+          SPO_ADMIN_URL: ${{ secrets.M365_SPO_ADMIN_URL }}
+        run: |
+          Import-Module ./src/BackupM365.psd1 -Force
+          Connect-M365Tenant -TenantId $env:TENANT_ID -ClientId $env:CLIENT_ID -CertificateThumbprint $env:CERT_THUMBPRINT -ConnectExchange -ConnectTeams -SharePointAdminUrl $env:SPO_ADMIN_URL
+          $backupPath = Export-M365TenantConfig -TenantName 'tenant' -TenantId $env:TENANT_ID -Verbose
+          Disconnect-M365Tenant
+          "Backup completed: $backupPath"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m365-backup
+          path: output/Backups

@@ -1,0 +1,71 @@
+{
+  "_comment": "Copy this file to backup.config.json and fill in your tenant values. backup.config.json is gitignored and must never be committed.",
+  "tenant": {
+    "tenantName": "<YOUR_TENANT>.onmicrosoft.com",
+    "tenantId": "<YOUR_TENANT_ID_GUID>"
+  },
+  "authentication": {
+    "mode": "AppCertificate",
+    "clientId": "<YOUR_APP_REGISTRATION_CLIENT_ID>",
+    "certificateThumbprint": "<YOUR_CERTIFICATE_THUMBPRINT>"
+  },
+  "sharePointAdminUrl": "https://<YOUR_TENANT>-admin.sharepoint.com/",
+  "workloads": [
+    "EntraID",
+    "ExchangeOnline",
+    "Teams",
+    "SharePoint",
+    "Intune",
+    "Compliance",
+    "Defender",
+    "PowerPlatform",
+    "Planner",
+    "Users"
+  ],
+  "outputRoot": "C:\\backup",
+  "throttling": {
+    "maxRetries": 6,
+    "baseDelaySeconds": 2,
+    "maxDelaySeconds": 120,
+    "jitterRatio": 0.2
+  },
+  "intune": {
+    "skipAutopilotHardwareHash": false
+  },
+  "exchange": {
+    "_comment": "Per-mailbox export tweaks. skipMailboxIRMAccess silences Get-MailboxIRMAccess (requires AIP/Purview Information Protection to be activated). skipSystemMailboxes filters out DiscoverySearchMailbox, HealthMailbox, SystemMailbox{...}, FederatedEmail.* and Migration.* arbitration boxes.",
+    "skipMailboxIRMAccess": true,
+    "skipSystemMailboxes": true
+  },
+  "extendedExports": {
+    "_comment": "Per-object exports iterate every mailbox/team/site/group. They are accurate but slow on large tenants. Set the relevant flag to false to skip.",
+    "exchangePerMailbox": true,
+    "teamsPerTeam": true,
+    "sharePointPerSite": true,
+    "perObjectMaxItems": 0
+  },
+  "defender": {
+    "_comment": "Defender for Endpoint uses api.securitycenter.microsoft.com — the same app must have WindowsDefenderATP API permissions granted. Set enabled: false to skip.",
+    "endpointSecurityCenterEnabled": true
+  },
+  "powerPlatform": {
+    "_comment": "Power Platform module does not support certificate auth, so you need a client secret on the same app registration. If you do not want to add one, leave enabled: false",
+    "enabled": false,
+    "clientSecret": "<YOUR_POWER_PLATFORM_CLIENT_SECRET>"
+  },
+  "prechecks": {
+    "_comment": "Run Test-M365BackupPrerequisites before the backup. Pass -SkipPrechecks on the command line to skip per-run. Set installMissingModules:true to auto-install required/optional PowerShell modules from PSGallery (equivalent to passing -InstallMissingModules).",
+    "enabled": true,
+    "requireAllRequiredModules": true,
+    "installMissingModules": false,
+    "requireValidConfig": true,
+    "requireValidCertificate": true,
+    "requireWritableOutput": true,
+    "checkGraphPermissions": true,
+    "createMissingFolders": true
+  },
+  "precheck": {
+    "_comment": "Optional extra Graph application roles to require during precheck. Added on top of the built-in per-workload list. Useful for tenants that need permissions outside the standard set.",
+    "requiredGraphPermissions": []
+  }
+}

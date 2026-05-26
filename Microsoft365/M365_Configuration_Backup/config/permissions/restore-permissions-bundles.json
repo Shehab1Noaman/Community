@@ -1,0 +1,175 @@
+{
+  "_comment": "Restore permission bundles for the BackupM365 restore app registration. This file intentionally includes write-capable roles needed by restore operations.",
+
+  "apis": {
+    "MicrosoftGraph":      "00000003-0000-0000-c000-000000000000",
+    "ExchangeOnline":      "00000002-0000-0ff1-ce00-000000000000",
+    "SharePointOnline":    "00000003-0000-0ff1-ce00-000000000000",
+    "WindowsDefenderATP":  "fc780465-2017-40d4-a0c5-307022471b92",
+    "PowerBIService":      "00000009-0000-0000-c000-000000000000"
+  },
+
+  "bundles": {
+    "Full": {
+      "description": "Everything the restore workflow may apply. Recommended for a dedicated restore app.",
+      "includes": ["Entra", "Users", "Intune", "Exchange", "SharePoint", "Teams", "Compliance", "Defender", "Planner"]
+    },
+
+    "Entra": {
+      "description": "Entra ID restore operations: policies, CA, apps, groups, and directory settings.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "Directory.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "Application.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "Group.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "Policy.ReadWrite.ConditionalAccess" },
+        { "api": "MicrosoftGraph", "role": "Policy.ReadWrite.AuthenticationMethod" },
+        { "api": "MicrosoftGraph", "role": "Policy.ReadWrite.Authorization" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.ReadWrite.Directory" },
+        { "api": "MicrosoftGraph", "role": "Directory.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.PermissionGrant" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.ConditionalAccess" },
+        { "api": "MicrosoftGraph", "role": "Application.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Group.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Organization.Read.All" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.All" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.Directory" },
+        { "api": "MicrosoftGraph", "role": "RoleEligibilitySchedule.Read.Directory" },
+        { "api": "MicrosoftGraph", "role": "RoleAssignmentSchedule.Read.Directory" },
+        { "api": "MicrosoftGraph", "role": "AuditLog.Read.All" },
+        { "api": "MicrosoftGraph", "role": "IdentityProvider.Read.All" },
+        { "api": "MicrosoftGraph", "role": "IdentityUserFlow.Read.All" },
+        { "api": "MicrosoftGraph", "role": "APIConnectors.Read.All" },
+        { "api": "MicrosoftGraph", "role": "CustomAuthenticationExtension.Read.All" },
+        { "api": "MicrosoftGraph", "role": "CustomSecAttributeDefinition.Read.All" },
+        { "api": "MicrosoftGraph", "role": "VerifiableCredential.Read.All" },
+        { "api": "MicrosoftGraph", "role": "EntitlementManagement.Read.All" },
+        { "api": "MicrosoftGraph", "role": "LifecycleWorkflows.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Agreement.Read.All" },
+        { "api": "MicrosoftGraph", "role": "AccessReview.Read.All" },
+        { "api": "MicrosoftGraph", "role": "IdentityRiskyUser.Read.All" },
+        { "api": "MicrosoftGraph", "role": "IdentityRiskEvent.Read.All" },
+        { "api": "MicrosoftGraph", "role": "ConsentRequest.Read.All" },
+        { "api": "MicrosoftGraph", "role": "ExternalConnection.Read.All" },
+        { "api": "MicrosoftGraph", "role": "NetworkAccessPolicy.Read.All" },
+        { "api": "MicrosoftGraph", "role": "CrossTenantInformation.ReadBasic.All" },
+        { "api": "MicrosoftGraph", "role": "MultiTenantOrganization.Read.All" },
+        { "api": "MicrosoftGraph", "role": "SharePointTenantSettings.Read.All" },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Forms.Read.All" },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Microsoft365Install.Read.All" },
+        { "api": "MicrosoftGraph", "role": "ServiceHealth.Read.All" },
+        { "api": "MicrosoftGraph", "role": "People.Read.All" }
+      ]
+    },
+
+    "Users": {
+      "description": "User restore operations: profile and membership updates.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "User.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "Group.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "User.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Directory.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Group.Read.All" },
+        { "api": "MicrosoftGraph", "role": "GroupMember.Read.All" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.Directory" },
+        { "api": "MicrosoftGraph", "role": "UserAuthenticationMethod.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Device.Read.All" }
+      ]
+    },
+
+    "Intune": {
+      "description": "Intune restore operations for configuration, apps, scripts, enrollment settings, and Cloud PC (Windows 365).",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "DeviceManagementConfiguration.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementApps.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementServiceConfig.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementRBAC.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementManagedDevices.PrivilegedOperations.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementManagedDevices.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementConfiguration.Read.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementApps.Read.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementManagedDevices.Read.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementServiceConfig.Read.All" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementRBAC.Read.All" },
+        { "api": "MicrosoftGraph", "role": "CloudPC.ReadWrite.All" }
+      ]
+    },
+
+    "Exchange": {
+      "description": "Exchange Online tenant configuration. Requires the Exchange.ManageAsApp app role AND a directory role assignment (see README).",
+      "permissions": [
+        { "api": "ExchangeOnline", "role": "Exchange.ManageAsApp" }
+      ],
+      "directoryRoles": ["Global Reader"]
+    },
+
+    "SharePoint": {
+      "description": "SharePoint tenant settings, sites, hub sites, search. Used by SPO + PnP.",
+      "permissions": [
+        { "api": "SharePointOnline", "role": "Sites.FullControl.All" },
+        { "api": "MicrosoftGraph",   "role": "Sites.FullControl.All" }
+      ]
+    },
+
+    "Teams": {
+      "description": "Teams restore operations for policy and team-level configuration.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "TeamSettings.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "ChannelSettings.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "TeamsAppInstallation.ReadWriteForTeam.All" },
+        { "api": "MicrosoftGraph", "role": "TeamSettings.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Team.ReadBasic.All" },
+        { "api": "MicrosoftGraph", "role": "TeamMember.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Channel.ReadBasic.All" },
+        { "api": "MicrosoftGraph", "role": "ChannelSettings.Read.All" },
+        { "api": "MicrosoftGraph", "role": "TeamsTab.Read.All" },
+        { "api": "MicrosoftGraph", "role": "TeamsAppInstallation.ReadForTeam.All" }
+      ]
+    },
+
+    "Compliance": {
+      "description": "Security & Compliance / Purview. Uses the SAME Exchange.ManageAsApp role; admin must additionally assign Compliance Administrator or Compliance Data Administrator to the service principal.",
+      "permissions": [
+        { "api": "ExchangeOnline", "role": "Exchange.ManageAsApp" }
+      ],
+      "directoryRoles": ["Compliance Administrator"]
+    },
+
+    "Defender": {
+      "description": "Defender Secure Score + threat submissions via Graph; Defender for Endpoint via the dedicated WindowsDefenderATP API.",
+      "permissions": [
+        { "api": "MicrosoftGraph",      "role": "SecurityEvents.Read.All" },
+        { "api": "MicrosoftGraph",      "role": "SecurityActions.Read.All" },
+        { "api": "MicrosoftGraph",      "role": "ThreatHunting.Read.All" },
+        { "api": "MicrosoftGraph",      "role": "ThreatSubmission.Read.All" },
+        { "api": "WindowsDefenderATP",  "role": "Machine.Read.All" },
+        { "api": "WindowsDefenderATP",  "role": "AdvancedQuery.Read.All" },
+        { "api": "WindowsDefenderATP",  "role": "SecurityRecommendation.Read.All" },
+        { "api": "WindowsDefenderATP",  "role": "Vulnerability.Read.All" },
+        { "api": "WindowsDefenderATP",  "role": "Score.Read.All" },
+        { "api": "WindowsDefenderATP",  "role": "SecurityBaselinesAssessment.Read.All" }
+      ]
+    },
+
+    "Planner": {
+      "description": "Planner restore operations for plans, buckets, and tasks.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "Tasks.ReadWrite.All" },
+        { "api": "MicrosoftGraph", "role": "Tasks.Read.All" },
+        { "api": "MicrosoftGraph", "role": "Group.Read.All" }
+      ]
+    }
+  },
+
+  "limitations": {
+    "_comment": "Workloads/objects that require additional licensing or activation beyond app-role grants.",
+    "PowerPlatform": "Restore currently does not automate Power Platform writeback. Keep this workload in report-only mode unless you implement tenant-specific runbooks.",
+    "General": "Restore requires broader API permissions than backup because update/create/delete operations are write actions. Validate and least-privilege these bundles for your tenant policy.",
+    "EntraIdP2Required": "PIM, Identity Protection, and Identity Governance (Entitlement Management, Lifecycle Workflows, Access Reviews) require Entra ID P2 / Entra ID Governance.",
+    "CloudPcRequired": "Cloud PC management requires Windows 365 licensing.",
+    "VerifiedIdRequired": "Verified ID authorities require Microsoft Entra Verified ID onboarding.",
+    "NetworkAccessRequired": "Network access policies require Entra Internet Access / Global Secure Access licensing.",
+    "AipIrmRequired": "Per-mailbox IRM rights require AIP / Purview Information Protection activation.",
+    "SharePointAppOnly": "Microsoft.Online.SharePoint.PowerShell does not support app-only auth; PnP fallbacks cover the same items."
+  }
+}

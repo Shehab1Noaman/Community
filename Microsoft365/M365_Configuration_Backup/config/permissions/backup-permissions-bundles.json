@@ -1,0 +1,195 @@
+{
+  "_comment": "Backup permission bundles for the BackupM365 app registration. Each permission has api, role, and type ('Application' or 'Delegated'). If 'type' is omitted it defaults to 'Application'. Combine bundles with -Bundles 'Full' or -Bundles 'Entra,Intune'.",
+
+  "apis": {
+    "MicrosoftGraph":      "00000003-0000-0000-c000-000000000000",
+    "ExchangeOnline":      "00000002-0000-0ff1-ce00-000000000000",
+    "SharePointOnline":    "00000003-0000-0ff1-ce00-000000000000",
+    "WindowsDefenderATP":  "fc780465-2017-40d4-a0c5-307022471b92",
+    "PowerBIService":      "00000009-0000-0000-c000-000000000000"
+  },
+
+  "bundles": {
+    "Full": {
+      "description": "Everything the BackupM365 module can export. Recommended for a single dedicated backup app.",
+      "includes": ["Entra", "Users", "Intune", "Exchange", "SharePoint", "Teams", "Compliance", "Defender", "Planner"]
+    },
+
+    "Entra": {
+      "description": "Entra ID tenant configuration: policies, CA, roles, apps, governance, branding, etc.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "Directory.Read.All",                          "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Directory.Read.All",                          "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.All",                             "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.PermissionGrant",                 "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.PermissionGrant",                 "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.ConditionalAccess",               "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.ConditionalAccess",               "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.AuthenticationMethod",            "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.DeviceConfiguration",             "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Policy.Read.IdentityProtection",              "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Application.Read.All",                        "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Application.Read.All",                        "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Group.Read.All",                              "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "GroupSettings.Read.All",                      "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Organization.Read.All",                       "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.All",                     "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.Directory",               "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.Directory",               "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "RoleManagementPolicy.Read.Directory",         "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "RoleEligibilitySchedule.Read.Directory",      "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "RoleAssignmentSchedule.Read.Directory",       "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "RoleAssignmentSchedule.Read.Directory",       "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "PrivilegedEligibilitySchedule.Read.AzureADGroup", "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "AdministrativeUnit.Read.All",                 "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "AppCertTrustConfiguration.Read.All",          "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "AuthenticationContext.Read.All",              "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Domain.Read.All",                             "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "AuditLog.Read.All",                           "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "IdentityProvider.Read.All",                   "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "IdentityUserFlow.Read.All",                   "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "IdentityUserFlow.Read.All",                   "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "APIConnectors.Read.All",                      "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "CustomAuthenticationExtension.Read.All",      "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "CustomSecAttributeDefinition.Read.All",       "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "VerifiableCredential.Read.All",               "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "EntitlementManagement.Read.All",              "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "LifecycleWorkflows.Read.All",                 "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "LifecycleWorkflows.Read.All",                 "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Agreement.Read.All",                          "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Agreement.Read.All",                          "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "AccessReview.Read.All",                       "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "AccessReview.Read.All",                       "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "IdentityRiskyUser.Read.All",                  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "IdentityRiskEvent.Read.All",                  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "ConsentRequest.Read.All",                     "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "ExternalConnection.Read.All",                 "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "NetworkAccess.Read.All",                      "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "NetworkAccessPolicy.Read.All",                "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "CrossTenantInformation.ReadBasic.All",        "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "MultiTenantOrganization.Read.All",            "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "SharePointTenantSettings.Read.All",           "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-AppsAndServices.Read.All",        "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-DynamicsVoice.Read.All",          "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Forms.Read.All",                  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Forms.Read.All",                  "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Microsoft365Install.Read.All",    "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Microsoft365Install.Read.All",    "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "OrgSettings-Todo.Read.All",                   "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "PeopleSettings.Read.All",                     "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "ProgramControl.Read.All",                     "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "ReportSettings.Read.All",                     "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "ServiceHealth.Read.All",                      "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "People.Read.All",                             "type": "Application" }
+      ],
+      "directoryRoles": ["Attribute Definition Reader"]
+    },
+
+    "Users": {
+      "description": "User inventory, properties, memberships, roles, license details, auth methods.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "User.Read.All",                       "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Directory.Read.All",                  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Directory.Read.All",                  "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Group.Read.All",                      "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "GroupMember.Read.All",                "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "GroupMember.Read.All",                "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.Directory",       "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "RoleManagement.Read.Directory",       "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "UserAuthenticationMethod.Read.All",   "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "UserAuthenticationMethod.Read.All",   "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "Device.Read.All",                     "type": "Application" }
+      ]
+    },
+
+    "Intune": {
+      "description": "Intune device management configuration, apps, scripts, autopilot, Cloud PC (Windows 365).",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "DeviceManagementConfiguration.Read.All",  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementConfiguration.Read.All",  "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementApps.Read.All",           "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementManagedDevices.Read.All", "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementManagedDevices.Read.All", "type": "Delegated"   },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementServiceConfig.Read.All",  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementRBAC.Read.All",           "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "DeviceManagementScripts.Read.All",        "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "CloudPC.Read.All",                        "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "CloudPC.Read.All",                        "type": "Delegated"   }
+      ]
+    },
+
+    "Exchange": {
+      "description": "Exchange Online tenant configuration. Requires the Exchange.ManageAsApp app role AND a directory role assignment (see README).",
+      "permissions": [
+        { "api": "ExchangeOnline", "role": "Exchange.ManageAsApp", "type": "Application" }
+      ],
+      "directoryRoles": ["Global Reader"]
+    },
+
+    "SharePoint": {
+      "description": "SharePoint tenant settings, sites, hub sites, search. Used by SPO + PnP.",
+      "permissions": [
+        { "api": "SharePointOnline", "role": "Sites.FullControl.All", "type": "Application" },
+        { "api": "MicrosoftGraph",   "role": "Sites.FullControl.All", "type": "Application" }
+      ]
+    },
+
+    "Teams": {
+      "description": "Teams policies and per-team config. Uses Graph + MicrosoftTeams module (which calls Graph + Skype endpoints with the same app token).",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "TeamSettings.Read.All",                "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Team.ReadBasic.All",                   "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "TeamMember.Read.All",                  "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Channel.ReadBasic.All",                "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "ChannelSettings.Read.All",             "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "TeamsTab.Read.All",                    "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "TeamsAppInstallation.ReadForTeam.All", "type": "Application" }
+      ]
+    },
+
+    "Compliance": {
+      "description": "Security & Compliance / Purview. Uses the SAME Exchange.ManageAsApp role; admin must additionally assign Compliance Administrator or Compliance Data Administrator to the service principal.",
+      "permissions": [
+        { "api": "ExchangeOnline", "role": "Exchange.ManageAsApp", "type": "Application" }
+      ],
+      "directoryRoles": ["Compliance Administrator"]
+    },
+
+    "Defender": {
+      "description": "Defender Secure Score + threat submissions via Graph; Defender for Endpoint via the dedicated WindowsDefenderATP API.",
+      "permissions": [
+        { "api": "MicrosoftGraph",      "role": "SecurityEvents.Read.All",                "type": "Application" },
+        { "api": "MicrosoftGraph",      "role": "SecurityActions.Read.All",               "type": "Application" },
+        { "api": "MicrosoftGraph",      "role": "ThreatHunting.Read.All",                 "type": "Application" },
+        { "api": "MicrosoftGraph",      "role": "ThreatSubmission.Read.All",              "type": "Application" },
+        { "api": "MicrosoftGraph",      "role": "RoleManagement.Read.Defender",           "type": "Application" },
+        { "api": "WindowsDefenderATP",  "role": "Machine.Read.All",                       "type": "Application" },
+        { "api": "WindowsDefenderATP",  "role": "AdvancedQuery.Read.All",                 "type": "Application" },
+        { "api": "WindowsDefenderATP",  "role": "SecurityRecommendation.Read.All",        "type": "Application" },
+        { "api": "WindowsDefenderATP",  "role": "Vulnerability.Read.All",                 "type": "Application" },
+        { "api": "WindowsDefenderATP",  "role": "Score.Read.All",                         "type": "Application" },
+        { "api": "WindowsDefenderATP",  "role": "SecurityBaselinesAssessment.Read.All",   "type": "Application" }
+      ]
+    },
+
+    "Planner": {
+      "description": "Planner plans, buckets, and tasks per Microsoft 365 group.",
+      "permissions": [
+        { "api": "MicrosoftGraph", "role": "Tasks.Read.All", "type": "Application" },
+        { "api": "MicrosoftGraph", "role": "Group.Read.All", "type": "Application" }
+      ]
+    }
+  },
+
+  "limitations": {
+    "_comment": "Workloads/objects that require additional licensing or activation beyond app-role grants.",
+    "PowerPlatform": "The Microsoft.PowerApps.Administration.PowerShell module does not support certificate-based service-principal auth. A client secret on the same app registration is required. Add it via 'Certificates & secrets → New client secret' in the Azure portal and put the value in config\\backup.config.json under powerPlatform.clientSecret.",
+    "EntraIdP2Required": "PIM (RoleEligibilitySchedules, RoleAssignmentSchedules), Identity Protection risky-user/event APIs, and Identity Governance (EntitlementManagement, LifecycleWorkflows, AccessReviews) all require Entra ID P2 / Entra ID Governance licensing. Without P2, those endpoints return 403 Forbidden no matter what permissions are granted.",
+    "CloudPcRequired": "CloudPcProvisioningPolicies / CloudPcUserSettings / CloudPcOnPremisesConnections require Windows 365 (Cloud PC) licensing in the tenant. Without licenses the endpoints return 403 Forbidden even with CloudPC.Read.All granted.",
+    "VerifiedIdRequired": "VerifiedIdAuthorities require Microsoft Entra Verified ID to be onboarded in the tenant.",
+    "NetworkAccessRequired": "NetworkAccessForwardingProfiles require Microsoft Entra Internet Access / Global Secure Access licensing.",
+    "AipIrmRequired": "Get-MailboxIRMAccess (per-mailbox IRM rights) returns 'A server side error has occurred' on every mailbox unless Azure Information Protection / Purview Information Protection is activated. Either enable IRM (Set-IRMConfiguration -InternalLicensingEnabled $true with an AIP plan) or set exchange.skipMailboxIRMAccess=true in backup.config.json.",
+    "SharePointAppOnly": "Microsoft.Online.SharePoint.PowerShell (Get-SPOTenant, Get-SPOSite, etc.) does NOT support app-only certificate auth. Those items are exported via PnP fallbacks; pure-SPO items remain skipped under app-only auth.",
+    "BetaApiOnly": "PolicySets uses the Graph beta endpoint and an Intune Plan 1/2 license. AppleMDMPushNotificationCertificate returns 404 when no Apple MDM Push cert has been uploaded — this is expected, not a permission issue."
+  }
+}

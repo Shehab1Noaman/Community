@@ -1,0 +1,18 @@
+{
+  "_comment": "Per-workload object-type apply toggles for Users. Loaded automatically by Restore-M365TenantConfig when scope.workloadSwitches.Users = true and restore.config.json does not contain an inline scope.workloadObjectTypes.Users block. Schema: flat { name: bool } or wrapped { objectTypes: { name: bool } }. Users restore is export-first today: none of these flags drive write-back yet; they list what we have on disk so admins can pre-select scope as apply coverage grows.",
+
+  "Users": true,
+  "UserManagers": true,
+  "UserDirectReports": true,
+  "UserMemberOf": true,
+  "UserAppRoleAssignments": true,
+  "UserLicenseDetails": true,
+  "UserAuthenticationMethods": true,
+  "UserOwnedObjects": true,
+  "UserOwnedDevices": true,
+  "UserDirectoryRoleMemberships": true,
+  "MailboxSignatures": true,
+  "MailboxFullAccessPermissions": true,
+  "MailboxSendAsPermissions": true,
+  "MailboxSendOnBehalfPermissions": true
+}
